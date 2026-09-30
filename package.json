@@ -5,13 +5,15 @@
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build",
-    "build:gh": "GH_PAGES=1 next build && touch out/.nojekyll",
     "start": "next start -p 3000",
-    "lint": "next lint"
+    "bootstrap-admin": "node scripts/bootstrap-admin.cjs",
+    "test": "node test-chat-thread.cjs && node test-chat-local-store.cjs && node test-chat-ui.cjs && node test-ocr.cjs && node test-ocr-api.cjs && node test-auth-store.cjs && node test-audit-store.cjs && node test-audit-api.cjs && node test-auth-api.cjs && node test-anchor-registration.cjs && node test-anchor-registration-api.cjs && node test-auth-ui.cjs && node test-admin-ui.cjs && node test-server-chat.cjs && node test-server-chat-api.cjs && node test-server-chat-ui.cjs && node test-core.cjs && node test-goutoujunshi-core.cjs && node test-api.cjs && node test-generation-contract.cjs && node test-health.cjs && node test-memory.cjs && node test-knowledge-router.cjs && node test-request-budget.cjs && node test-1v1.cjs && node test-settings.cjs && node test-local-config.cjs && node test-settings-api.cjs && node test-launcher-env.cjs"
   },
   "dependencies": {
-    "next": "14.2.5",
-    "react": "18.3.1",
-    "react-dom": "18.3.1"
+    "better-sqlite3": "^13.0.3",
+    "next": "16.3.3",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "tesseract.js": "^6.0.1"
   }
 }
