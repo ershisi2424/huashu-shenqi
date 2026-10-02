@@ -126,3 +126,4 @@
 - Task 2 已完成：新增上游参考路由、allowlist、路径越界保护、原文摘录和 SHA-256 provenance；普通问候加载 2 份，情绪场景最多加载 3 份；Runtime 定向测试通过。
 - Task 3 已完成：新增首次建档/紧急例外、情绪与风险判断、唯一主目标、互惠/机会成本、观察窗口/停止条件和 GLM 输出安全校验；Runtime 定向测试通过。
 - Task 4 已完成：SQLite 增加按主播/维护对象隔离的 Runtime memory 表和同意/暂停/恢复/撤销/忘记/清空/回滚方法；来源和条数上限受服务端校验；`node test-goutoujunshi-runtime-memory.cjs` 通过。
+- Task 5 已完成：新增 Runtime 编排器和长期记忆 API；跨主播访问被拒绝，运营/管理只读；Runtime 定向、记忆 API、auth-store 回归通过。长期记忆默认不进入 GLM prompt，避免未经针对性同意将关系资料发送给外部模型。

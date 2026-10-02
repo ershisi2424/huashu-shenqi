@@ -8,6 +8,7 @@ const assert = require("node:assert/strict");
   const { buildIntake } = await import("./lib/goutoujunshi-runtime/intake.js");
   const { decide } = await import("./lib/goutoujunshi-runtime/decision.js");
   const { normalizeRuntimeResult, buildPromptContext, validateGenerationAgainstRuntime } = await import("./lib/goutoujunshi-runtime/contract.js");
+  const { analyzeGoutoujunshiRuntime } = await import("./lib/goutoujunshi-runtime/index.js");
 
   const input = normalizeRuntimeInput({
     actor: { userId: "anchor-1", role: "anchor" },
@@ -70,6 +71,22 @@ const assert = require("node:assert/strict");
   assert.ok(buildPromptContext(normalized, routed.items).includes("primaryGoal"));
   assert.throws(() => validateGenerationAgainstRuntime(normalized, { replies: [{ text: "哥给我刷礼物，我才开心" }] }), (error) => error.code === "INVALID_AI_POLICY");
   assert.throws(() => validateGenerationAgainstRuntime(normalized, { primaryGoal: "收线", replies: [] }), (error) => error.code === "INVALID_AI_POLICY");
+
+  const runtimeResult = analyzeGoutoujunshiRuntime({
+    actor: { userId: "anchor-1", role: "anchor" },
+    subject: { brotherId: "brother-1", alias: "同名大哥" },
+    currentMessage: "今天被老板骂了，很难受",
+    history: [],
+    sources: { works: "户外视频" },
+    memoryAdapter: {
+      status: () => ({ consentEnabled: false, paused: false }),
+      context: () => [],
+    },
+  });
+  assert.deepEqual(runtimeResult.runtime.stages, ["emotion", "intake", "evidence", "knowledge", "decision", "action", "memory"]);
+  assert.equal(runtimeResult.runtime.name, "goutoujunshi");
+  assert.ok(runtimeResult.promptContext.includes("primaryGoal"));
+  assert.equal(runtimeResult.promptContext.includes("ZAI_API_KEY"), false);
   console.log("runtime input/evidence red contract reached");
 })().catch((error) => {
   console.error(error);

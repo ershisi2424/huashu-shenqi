@@ -185,4 +185,5 @@
 - [completed] Task 2：上游参考 manifest 与渐进式披露
 - [completed] Task 3：建档、五阶段决策引擎和行动契约
 - [completed] Task 4：服务端隔离长期记忆
-- [in_progress] Task 5：Runtime 编排器和记忆 API
+- [completed] Task 5：Runtime 编排器和记忆 API
+- [in_progress] Task 6：profile API 改为 Runtime 链路
