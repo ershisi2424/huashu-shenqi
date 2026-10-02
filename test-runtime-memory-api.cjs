@@ -68,7 +68,8 @@ async function call(handler, { method = "GET", body = {}, cookie = "", query = {
   assert.equal(initial.status, 200);
   assert.equal(initial.payload.status.consentEnabled, false);
   assert.equal((await call(handler, { cookie: operatorCookie, query: { brotherId: brother.id } })).status, 200);
-  assert.equal((await call(handler, { method: "POST", cookie: anchorCookie, body: { action: "enable", brotherId: brother.id } })).status, 200);
+  assert.equal((await call(handler, { method: "POST", cookie: anchorCookie, body: { action: "enable", brotherId: brother.id } })).status, 400);
+  assert.equal((await call(handler, { method: "POST", cookie: anchorCookie, body: { action: "enable", brotherId: brother.id, consent: true } })).status, 200);
   assert.equal((await call(handler, { method: "POST", cookie: operatorCookie, body: { action: "pause", brotherId: brother.id } })).status, 403);
   const applied = await call(handler, { method: "POST", cookie: anchorCookie, body: { action: "apply", brotherId: brother.id, delta: { scope: "object", field: "interest", value: "户外", sourceType: "user_explicit", confidence: "high" } } });
   assert.equal(applied.status, 201);

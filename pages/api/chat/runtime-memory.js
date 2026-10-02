@@ -43,7 +43,10 @@ export default async function handler(req, res) {
     if (command.action === "status") {
       return res.status(200).json({ status: store.getRuntimeMemoryStatus({ actor, brotherId: command.brotherId }), ...store.listRuntimeMemory({ actor, brotherId: command.brotherId }) });
     }
-    if (command.action === "enable") return res.status(200).json({ status: store.enableRuntimeMemory({ actor, brotherId: command.brotherId }) });
+    if (command.action === "enable") {
+      if (command.consent !== true) return res.status(400).json({ error: "请先明确同意启用长期记忆", code: "CONSENT_REQUIRED" });
+      return res.status(200).json({ status: store.enableRuntimeMemory({ actor, brotherId: command.brotherId }) });
+    }
     if (command.action === "pause") return res.status(200).json({ status: store.pauseRuntimeMemory({ actor, brotherId: command.brotherId }) });
     if (command.action === "resume") return res.status(200).json({ status: store.resumeRuntimeMemory({ actor, brotherId: command.brotherId }) });
     if (command.action === "apply") return res.status(201).json({ item: store.applyRuntimeMemoryDelta({ actor, brotherId: command.brotherId, delta: command.delta }) });
