@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 (async () => {
   const { normalizeRuntimeInput } = await import("./lib/goutoujunshi-runtime/input.js");
   const { splitEvidence } = await import("./lib/goutoujunshi-runtime/evidence.js");
+  const { loadRuntimeReferences } = await import("./lib/goutoujunshi-runtime/knowledge.js");
 
   const input = normalizeRuntimeInput({
     actor: { userId: "anchor-1", role: "anchor" },
@@ -23,6 +24,19 @@ const assert = require("node:assert/strict");
   assert.ok(evidence.unknowns.some((item) => item.text.includes("熟悉程度")));
   assert.equal(evidence.evidence[0].speaker, "brother");
   assert.equal(evidence.evidence[0].source, "current_message");
+
+  const routed = loadRuntimeReferences({
+    message: "今天被老板骂了，真的很难受",
+    risk: { types: [] },
+    primaryGoal: "承接",
+  });
+  assert.equal(routed.items.length, 3);
+  assert.ok(routed.items.every((item) => /^references\//.test(item.path)));
+  assert.ok(routed.items.every((item) => /^[a-f0-9]{64}$/.test(item.sha256)));
+  assert.ok(routed.items.some((item) => item.path.includes("03-依恋理论")));
+  const ordinary = loadRuntimeReferences({ message: "在吗", risk: { types: [] }, primaryGoal: "承接" });
+  assert.equal(ordinary.items.length, 2);
+  assert.throws(() => loadRuntimeReferences({ selectedReferences: ["../SKILL.md"] }), (error) => error.code === "RUNTIME_REFERENCE_NOT_ALLOWED");
   console.log("runtime input/evidence red contract reached");
 })().catch((error) => {
   console.error(error);

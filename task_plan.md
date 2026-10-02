@@ -182,4 +182,5 @@
 - [completed] 用户审阅并确认设计文档
 - [completed] 编写实现计划 `docs/superpowers/plans/2026-10-03-goutoujunshi-runtime.md`
 - [completed] Task 1：Runtime 输入规范化和证据边界
-- [in_progress] Task 2：上游参考 manifest 与渐进式披露
+- [completed] Task 2：上游参考 manifest 与渐进式披露
+- [in_progress] Task 3：建档、五阶段决策引擎和行动契约
