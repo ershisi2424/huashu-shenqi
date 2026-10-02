@@ -127,3 +127,6 @@
 - Task 3 已完成：新增首次建档/紧急例外、情绪与风险判断、唯一主目标、互惠/机会成本、观察窗口/停止条件和 GLM 输出安全校验；Runtime 定向测试通过。
 - Task 4 已完成：SQLite 增加按主播/维护对象隔离的 Runtime memory 表和同意/暂停/恢复/撤销/忘记/清空/回滚方法；来源和条数上限受服务端校验；`node test-goutoujunshi-runtime-memory.cjs` 通过。
 - Task 5 已完成：新增 Runtime 编排器和长期记忆 API；跨主播访问被拒绝，运营/管理只读；Runtime 定向、记忆 API、auth-store 回归通过。长期记忆默认不进入 GLM prompt，避免未经针对性同意将关系资料发送给外部模型。
+- Task 6 已完成：`pages/api/profile.js` 先调用服务端 Runtime，再把固定版本、事实/未知、风险、主目标、动作和经校验的上游摘录交给 GLM-5.3；请求携带主播和维护对象唯一 ID，客户端目标不能覆盖服务端判断。服务端输出增加 `runtime`、`intake`、`analysis`、`memory`，并拒绝越过 Runtime 边界的生成结果。
+- Task 7 已完成：聊天页和管理只读预览保存并展示本轮判断依据、资料不足提示、停止条件、上游 revision；对象级长期记忆状态支持主播明确同意、暂停、恢复和撤销清除，运营/管理保持只读。分析结果随主播/维护对象工作台快照保存，移动端沿用折叠面板和暗色主题。
+- Task 8 已完成：`npm test` 全量通过，`npm run test:runtime` 通过，`python3 vendor/goutoujunshi/scripts/validate_skill.py` 通过，复制依赖到 `/private/tmp/huashu-build` 后 `npm run build` 通过；当前工作树 `.next` 因 3102 服务占用返回 EPERM，未触碰运行中服务或真实数据库。尝试在沙箱启动 3103 被系统 listen 权限拒绝，未将其误判为应用故障。
