@@ -124,3 +124,4 @@
 - 用户已确认设计；实现计划已写入 `docs/superpowers/plans/2026-10-03-goutoujunshi-runtime.md`，尚未修改生产代码。
 - Task 1 已完成：新增 Runtime 输入清洗、主播/对象范围校验、来源/说话人映射和事实/推测/未知拆分；`node test-goutoujunshi-runtime.cjs` 通过。Node 对 ESM `.js` 有 MODULE_TYPELESS_PACKAGE_JSON 警告，暂不改变项目模块配置，Next 构建会按现有 ESM 方式处理。
 - Task 2 已完成：新增上游参考路由、allowlist、路径越界保护、原文摘录和 SHA-256 provenance；普通问候加载 2 份，情绪场景最多加载 3 份；Runtime 定向测试通过。
+- Task 3 已完成：新增首次建档/紧急例外、情绪与风险判断、唯一主目标、互惠/机会成本、观察窗口/停止条件和 GLM 输出安全校验；Runtime 定向测试通过。
