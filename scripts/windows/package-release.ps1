@@ -29,7 +29,10 @@ if (-not (Test-Path -LiteralPath $ReleaseDir -PathType Container)) {
   Stop-WithCode "PACKAGE_INPUT_MISSING" "发布目录不存在"
 }
 
-$verifierPath = Join-Path -Path (Split-Path -Parent $PSCommandPath) -ChildPath "verify-package.ps1"
+# GitHub Actions invokes this script from the repository root with Windows
+# PowerShell. Resolve the verifier from that stable, documented working root
+# instead of relying on automatic script-path variables across PowerShell hosts.
+$verifierPath = Join-Path -Path (Get-Location).Path -ChildPath "scripts\windows\verify-package.ps1"
 if (-not (Test-Path -LiteralPath $verifierPath -PathType Leaf)) {
   Stop-WithCode "PACKAGE_VERIFIER_MISSING" "缺少交付包校验脚本"
 }
