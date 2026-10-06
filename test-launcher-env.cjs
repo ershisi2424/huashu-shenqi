@@ -2,7 +2,12 @@ const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 
-const launcherPath = path.join(__dirname, "..", "启动大哥维护系统.command");
+const candidates = [
+  path.join(__dirname, "启动大哥维护系统.command"),
+  path.join(__dirname, "..", "启动大哥维护系统.command"),
+];
+const launcherPath = candidates.find((candidate) => fs.existsSync(candidate));
+assert(launcherPath, "仓库内或兼容位置缺少启动大哥维护系统.command");
 const launcher = fs.readFileSync(launcherPath, "utf8");
 
 assert(
