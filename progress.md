@@ -130,3 +130,234 @@
 - Task 6 已完成：`pages/api/profile.js` 先调用服务端 Runtime，再把固定版本、事实/未知、风险、主目标、动作和经校验的上游摘录交给 GLM-5.3；请求携带主播和维护对象唯一 ID，客户端目标不能覆盖服务端判断。服务端输出增加 `runtime`、`intake`、`analysis`、`memory`，并拒绝越过 Runtime 边界的生成结果。
 - Task 7 已完成：聊天页和管理只读预览保存并展示本轮判断依据、资料不足提示、停止条件、上游 revision；对象级长期记忆状态支持主播明确同意、暂停、恢复和撤销清除，运营/管理保持只读。分析结果随主播/维护对象工作台快照保存，移动端沿用折叠面板和暗色主题。
 - Task 8 已完成：`npm test` 全量通过，`npm run test:runtime` 通过，`python3 vendor/goutoujunshi/scripts/validate_skill.py` 通过，复制依赖到 `/private/tmp/huashu-build` 后 `npm run build` 通过；当前工作树 `.next` 因 3102 服务占用返回 EPERM，未触碰运行中服务或真实数据库。尝试在沙箱启动 3103 被系统 listen 权限拒绝，未将其误判为应用故障。
+
+## 2026-10-03 固定版聊天工作台排布
+
+- 按用户确认的 1 号方案，将聊天工作台固定为“顶部关系资料 → 中部聊天记录 → 底部主播回复”的单向操作流；没有引入拖拽布局编辑器，也没有改变服务端权限、AI API 或抖音发送边界。
+- 顶部 `relationshipDock` 集中展示当前维护对象的画像素材、Runtime 判断依据、维护任务、关系时间线、沟通边界和运营备注；默认折叠详细资料，手机端纵向展开。
+- 中部 `timeline` 只保留左右聊天气泡、修改/删除和滚动行为；底部 `replyWorkspace` 分开承载大哥消息输入、主播回复草稿、发送前检查、日常开场、复制/确认发送，以及 `aiCandidateShelf` 候选卡片。
+- AI 候选按钮仍只执行 `setAnchorDraft(reply.text)`，选中后填入主播回复框供主播修改；不会自动新增聊天气泡、标记已发送或调用抖音发送接口。
+- 定向契约 `test-chat-ui.cjs`、响应式契约 `test-chat-reply-responsive.cjs`、候选持久化/增强测试、`npm test`、隔离目录生产构建和 `git diff --check` 均通过。
+- 浏览器 3102 已复核顶部关系摘要、中部聊天记录、底部回复区和候选卡片；页面无编译错误。UI 静态规则检查仍会报告聊天 CSS 原有的颜色字面量基线问题，未将其误判为本阶段新增回归；exec 沙箱的 `inspect_runtime.py` 无法连接 localhost，浏览器复核作为运行时证据。
+
+## 2026-10-03 回复工作区 UI 错位修复
+
+- 根因是 textarea 仍只继承旧 `.composer textarea` 样式，新 `.replyComposer` 下没有宽度规则，浏览器按原生窄 textarea 渲染。
+- 增加 `.replyComposer textarea` 的宽度、块级显示、最小高度、边框和暗色样式；新增响应式契约，防止后续重排再次丢失输入框宽度。
+- 修复前 `node test-chat-reply-responsive.cjs` 按预期失败，修复后 `node test-chat-reply-responsive.cjs`、`node test-chat-ui.cjs`、`git diff --check` 和浏览器 3102 重新加载复核均通过。
+
+## 2026-10-03 聊天标题与关系资料头部合并
+
+- 移除重复的独立聊天标题栏，将当前对象头像、昵称、左右聊天说明、时间线事件数和“主播确认制”放入关系资料同一头部；下方只保留一个资料展开入口。
+- 删除重复显示的对象昵称与解释性关系资料摘要，进一步压缩顶部占用，聊天正文获得更多高度；详细画像、维护任务和关系时间线仍在折叠区内。
+- 先新增合并头部 UI 契约并确认旧结构下按预期失败；修复后定向测试、`npm test` 全量回归、隔离生产构建和 `git diff --check` 通过。
+
+## 2026-10-03 Runtime 错误提示残留修复
+
+- 根因是回复区直接渲染全局 `error` 状态；一次旧的 `goutoujunshi Runtime 输入不完整` 失败会一直占据候选区，切换维护对象或录入新消息后仍可能看到旧提示。
+- 新增 `lib/chat-error-state.cjs`，将 AI/开场错误绑定到当前维护对象和当前已确认的大哥消息；切换对象、恢复工作区、确认新消息和刷新账号会清理旧错误，其他任务/识别错误仍保留在当前对象范围内。
+- 错误容器增加 `role="alert"`，只显示与当前对象/消息匹配的错误；候选列表和历史恢复逻辑不变。
+- 新增错误作用域回归测试；`npm test` 全量通过，复制依赖到可写临时目录后的 `npm run build` 通过，`git diff --check` 通过；浏览器 3102 刷新后红色 Runtime 残留不再显示，已恢复 AI 候选。
+
+## 2026-10-03 Runtime 输入不完整真实失败修复
+
+- 浏览器点击“生成 AI 回复”复现到真实接口失败；服务端日志先暴露为 `ACTIVE_USER_REQUIRED`，确认不是欠费或旧提示残留。
+- 根因有两层：登录态服务端对象同步失败时曾把本地 clientId 回退为服务端对象 ID；更关键的是 Runtime 输入清洗只保留 `actor.userId`，而 auth-store 权限校验按 `actor.id` 查找主播，导致长期记忆状态检查失败。
+- `ensureServerBrother` 现在在登录态同步失败时返回空值，不再把本地 ID 伪装成数据库 UUID；Runtime actor 同时保留 `id` 与 `userId`，跨 Runtime 命名空间和 auth-store 权限契约均可用。
+- 服务端错误日志补充安全的 `Error.message` 诊断信息，但浏览器仍只收到脱敏错误文案。
+- Runtime 错误响应按 `ACTIVE_USER_REQUIRED`、对象作用域错误和真正的 `RUNTIME_SCOPE_REQUIRED` 分流，避免权限/同步故障再次显示成输入不完整。
+- 回归测试先按预期失败，再修复通过；浏览器 3102 实际点击生成已无 `goutoujunshi Runtime 输入不完整`，AI 候选正常保留并显示“候选已保存”。
+- 清理了联调期间临时录入的单条测试消息；未保留测试数据。
+
+## 2026-10-04 管理账号个人聊天作用域隔离
+
+- 修复超级管理员打开 `/chat/` 时看到其他主播聊天的问题：个人聊天页现在仅对主播账号加载服务端维护对象和本机快照，管理账号不会恢复上一账号的聊天内容，也不会请求全量维护对象。
+- 运营和超级管理员在 `/chat/` 看到明确的“进入运营后台”入口；指定主播的查看仍走后台的只读预览，不改变管理审计、审批和只读查看权限。
+- 新增认证作用域回归断言；`npm test` 全量通过，隔离目录 `npm run build` 通过，`git diff --check` 通过。
+
+## 2026-10-04 左侧大哥消息专项 AI 回复
+
+- 新增本轮回复目标选择器：最新确认的大哥消息自动选中；聊天记录中每条已确认的左侧大哥消息都可点击“针对这条回复”，选中后候选、画像判断和 Runtime `currentMessage` 均绑定该条正文。
+- 选择新目标会清除旧候选和旧分析，避免上一条消息的候选错配；截图导入和手动录入也会自动把最新大哥消息设为目标。
+- 新增目标选择器单元测试和 UI 契约；`npm test` 全量通过，隔离目录生产构建通过，`git diff --check` 通过。
+
+## 2026-10-05 回复候选区桌面排版错位修复
+
+- 根因是桌面 `.layout` 使用固定视口高度，`.chat` 隐藏溢出，`.replyWorkspace` 又限制为 `max-height:48%` 并开启内部滚动；候选卡片因此被裁切，截图中只剩部分按钮且左侧工作区看起来被挤压。
+- 桌面端改为页面自然展开，聊天记录单独使用有上限的滚动容器；回复工作区取消高度和溢出裁切，候选卡片统一最小高度并让“选用这条”按钮落在卡片底部。手机端原有纵向布局规则保持不变。
+- 新增 `test-chat-layout.cjs` 回归契约；修复前按预期失败，修复后该测试、响应式测试、全量 `npm test`、隔离目录生产构建和 `git diff --check` 均通过。
+- 3102 浏览器刷新后的运行时截图显示：左侧维护对象、聊天记录、主播回复区和 AI 候选区按“左侧工作区 / 右侧候选”稳定对齐，候选卡片可自然向下滚动，不再被回复区父容器截断。
+
+## 2026-10-05 移除实际发送勾选步骤
+
+- 删除主播回复区的“我已在抖音实际发送”复选框及对应 React 状态和前置拦截。
+- 保留“④ 标记已发送”作为主播手动记录动作；只要回复输入框有内容即可点击，仍不会调用抖音发送接口。
+- `test-chat-ui.cjs` 先按预期捕获旧勾选契约失败，移除后通过；全量 `npm test`、隔离目录生产构建和 `git diff --check` 均通过。
+## 2026-10-05 管理入口按钮间距修复
+- authGate 管理账号入口和退出按钮新增独立 flex 分组，间距 token 12px，窄屏自动换行。
+- 事件与权限逻辑保持不变；聊天界面、认证状态和登录入口契约测试通过。
+
+## 2026-10-05 核心链路稳定性与角色工作区阶段完成
+- 修复 AI 候选错配：服务端按当前 `sourceMessageId` 重建消息上下文，前端生成请求增加对象/消息/批次校验；旧请求返回时丢弃，不再覆盖新候选。
+- 修复刷新与恢复边界：快照、回复历史均保存目标消息 ID，目标不一致的历史候选不会恢复到当前候选区。
+- 运营与最高管理拥有按账号隔离的个人聊天工作区；主播、运营、最高管理的个人数据不互相复用，管理端仍可按权限只读查看主播工作台。
+- 超级管理员保留审批、全量操作审计、用户管理，并新增工具使用页（API 调用状态、耗时、成功率、服务运行状态）；运营复盘增加主播使用率/回复率。
+- 运营/最高管理只读主播工作台新增内部维护点评；主播端不显示运营备注。
+- 维护任务卡新增是否采用建议参与本轮 AI 生成的选择，任务方向作为提示上下文，不越过 Runtime 事实和安全边界。
+- 验证：`npm test` 退出码 0；隔离目录生产构建通过；3102 页面复核通过；`git diff --check` 通过。
+
+## 2026-10-05 审批隔离与私有 API 缓存修复
+
+- Service Worker 不再缓存同源 `/api` 响应，并按注册 scope 处理非根路径部署；避免登录态、审批待办和聊天快照按 URL 串线。
+- 认证、审批、用户列表和运行状态等 API 显式返回 `private, no-store`，保留现有服务端角色校验。
+- 审批中心将超级管理员的运营申请队列与主播申请队列独立加载；一条队列失败不会隐藏另一条，运营审批后当前可见队列会同步刷新。
+- 定向验证：`node test-service-worker.cjs`、`node test-approval-isolation.cjs`、`node test-auth-api.cjs`、`node test-admin-ui.cjs`、`node test-super-admin-approval-api.cjs`、`node test-super-admin-approval-ui.cjs` 均通过；`git diff --check` 通过。
+- 两轮规格/质量审查均通过；该阶段后续已完成只读工作台、维护任务和游客工作台实现，详见下方 2026-10-05 阶段记录。
+
+## 2026-10-05 审批、只读、维护任务与游客工作台阶段完成
+
+- 审批队列已按运营申请/主播申请独立加载，Service Worker 和私有 API 响应不再缓存账号相关内容；超级管理员可直接处理两类审批。
+- 只读主播工作台先复用当前正式登录会话，再请求服务端快照；运营只能查看自己管理的主播，超级管理员可查看全部，未登录和越权仍分别返回 401/403。
+- 维护任务支持按角色范围手动创建，人工任务 `sourceMessageId` 为空，`requestId` 幂等，创建和 `chat.task.create` 审计在同一事务内；聊天页可控制是否将任务建议带入 AI。
+- 游客手机号登录不创建正式用户，只保存手机号 HMAC；游客会话使用独立 Cookie，登录、业务请求、退出和服务启动会触发 24 小时懒清理，活跃请求续期 Cookie。
+- 游客工作台只使用 `guest:<匿名 ID>` 本地命名空间，退出时清理当前临时聊天、候选、回复历史和草稿；游客 `/api/profile` 请求不接受正式维护对象/消息/任务 ID，不写正式使用统计或审计，仍走 goutoujunshi Runtime → GLM-5.3。
+- 验证证据：`npm test` 退出码 0（包含 `test-guest-profile-api.cjs` 的游客 Runtime→GLM 模拟链路与正式 ID 拒绝测试）；游客/认证/聊天/API 定向测试、维护任务和审批测试通过；`git diff --check` 通过；隔离临时副本 `npm run build` 通过。
+- 限制：未进行真实外部智谱 API 调用、Windows 10 部署验证或真实浏览器 Service Worker 缓存运行时复核；构建验证使用了临时副本，未触碰 3102 服务和真实数据库。
+
+## 2026-10-05 Runtime 安全误报修复
+
+- 根因：`validateGenerationAgainstRuntime` 之前扫描 GLM 返回的整个 JSON；`rationale`、`observationWindow` 和 `stopCondition` 中用于解释“不诱导礼物/不推断敏感属性”的安全说明，会被误判成主播要发送的越界内容。
+- 修复：安全校验只检查真正可复制发送的 `replies[].text` 与 `liveInvite.text`，不放宽真实候选中的刷礼物、转账、借钱、充值、虚假依赖和敏感属性推断拦截。
+- 回归：新增安全边界误报测试；先按预期失败，再修复通过；`npm test` 与 `git diff --check` 均通过。
+
+## 2026-10-05 提示词边界文案收敛
+
+- 移除发送给 GLM 的具体礼物/健康等敏感清单式文案，改为“尊重隐私与自主决定”“不把压力转化为义务或回报”等自然表达，避免安全条款污染候选说明。
+- 仅调整模型提示词和测试契约；服务端对真实消费诱导、虚假依赖和敏感属性推断的硬拦截保持不变。
+- `test-api.cjs` 和 `npm test` 全量通过。
+
+## 2026-10-05 生产化基线阶段
+
+- 新增 `scripts/verification/discovery.cjs`、`scripts/verification/runner.cjs` 和 `scripts/verify.cjs`，统一发现并逐个隔离运行根目录 `test-*.cjs`，失败、超时、空测试集和敏感环境继承均有契约测试。
+- `package.json`、`package-lock.json` 与 CI 统一声明 Node `>=22.0.0`；这是 `better-sqlite3` 当前运行时要求，避免 CI 使用 Node 20 时与本地环境不一致。
+- `npm test` 当前实际发现并执行 84 项测试（包含此前长命令遗漏的角色工作区测试），全部通过；`git diff --check` 通过。
+- 仍未宣称生产验收：当前工作区构建受正在使用的 3102 开发服务和 `.next/trace` 文件锁影响，需在独立、无服务占用的副本中完成构建；真实 GLM、Windows 10 局域网和浏览器端到端仍单独验证。
+
+## 2026-10-05 回复完整性阶段
+
+- 新增 `test-chat-source-boundary.cjs`，先复现空来源、跨维护对象来源、未确认来源和伪造正文均可进入保存链路的问题，再完成服务端修复。
+- `lib/auth-store.cjs` 将来源校验集中到 `confirmedSourceMessageForBrother`：必须是当前维护对象、当前主播所有者、已确认的大哥消息；回复历史的正文以数据库原文为准，工作台候选有内容时必须绑定有效来源。
+- `/api/chat/reply-history/` 与 `/api/chat/workspace-snapshots/` 对非法来源返回 409；`/api/profile/` 的正式账号缺失来源时不会调用 AI。
+- 对象切换会清空旧画像/分析/候选；回复历史异步保存带生成批次校验，旧对象结果不会写入当前界面。
+- 本阶段定向测试和全量 `npm test` 通过；全量实际发现并执行 86 项测试，全部通过；`git diff --check` 通过。
+- 将 Node 22 写入 `.nvmrc`；在排除实时服务和真实数据库的独立副本中补齐 `data/scripts.json` 后，`npm run build` 通过。第一次使用外部 `node_modules` 符号链接的构建被 Turbopack 拒绝，改为真实依赖副本后通过。
+
+## 2026-10-05 管理员初始化安全阶段
+
+- 新增 `test-bootstrap-admin-safety.cjs`，先复现旧脚本可重复创建第二个最高管理员的问题，再完成修复。
+- `ensureBootstrapAdmin` 现在只对同一活动最高管理员幂等；已有活动最高管理员的新手机号返回 `BOOTSTRAP_ADMIN_EXISTS`，已有其他角色手机号返回 `BOOTSTRAP_PHONE_CONFLICT`，脚本返回非零状态并不泄露敏感信息。
+- `test-auth-store.cjs`、`test-auth-api.cjs`、管理员安全测试和全量验证均通过；全量验证实际发现 87 项并全部通过，强制重置和恢复流程仍未实现。
+- 独立构建产物编译通过；尝试在受控环境启动临时 `next start` 时被沙箱拒绝监听新端口（`listen EPERM`），现有 3102 服务未重启。
+
+## 2026-10-05 浏览器回归契约与认证限流阶段
+
+- 新增 `docs/production/BROWSER-REGRESSION.md` 和 `test-browser-regression-contract.cjs`，固定合成账号、临时数据库、临时端口、登录/权限/刷新恢复/候选来源绑定/账号隔离的浏览器验收边界；不把静态契约测试冒充真实浏览器通过。
+- 登录、注册和游客登录接入 SQLite `rate_limit_buckets` 事务限流；每个入口同时按请求来源与规范化账号建立不可逆摘要桶，返回 429、`AUTH_RATE_LIMIT` 和 `Retry-After`，未显式启用可信代理时不接受客户端伪造的转发地址。
+- 认证限流测试先按预期复现第三次错误请求返回 401 的旧行为，再修复为 429；覆盖登录、注册、游客入口、响应脱敏和伪造 `X-Forwarded-For` 不绕过。
+- 验证：`npm test` 实际发现并执行 91 项，全部通过；`node test-auth-rate-limit.cjs`、`node test-browser-regression-contract.cjs`、`git diff --check` 通过。独立副本生产构建已通过。
+- 环境边界：尝试启动隔离 `next start` 到 `127.0.0.1:3210` 返回 `listen EPERM`，因此真实浏览器流程仍待允许临时监听的环境执行；现有 3102 服务未停止。
+
+## 2026-10-05 认证默认策略阶段
+
+- 先新增 `test-auth-default.cjs`，在旧实现下复现“生产环境未配置 `AUTH_REQUIRED` 时仍匿名放行”的失败；修复后覆盖生产默认、开发默认和显式覆盖三种边界。
+- `authRequired()` 现在以显式 `AUTH_REQUIRED=true/false` 为最高优先级；未显式配置时生产环境默认要求登录，开发环境保留本地预览兼容性。
+- 健康检查、AI 入口和相关受保护入口统一使用策略函数，避免环境变量直接读取造成 UI 与 API 策略不一致。
+- 当时仅完成认证默认策略；密码恢复随后在管理员密码恢复阶段补齐，生产实机演练仍另行待验收。
+
+## 2026-10-05 数据库迁移账本与备份边界阶段
+
+- 新增 `lib/db-migrations.cjs`：为当前 auth/chat schema 建立 `schema_migrations` 基线 `0001.auth-store-baseline`，支持幂等重开、唯一版本、checksum 校验和迁移执行失败不落账。
+- `lib/auth-store.cjs` 在现有 schema 初始化和兼容列补齐后记录基线；已有数据库只采用当前实际 schema，不执行隐式破坏性迁移。后续结构变更必须登记新 migration id，重复 id 的 checksum 变化会阻止启动。
+- 新增 `lib/db-backup.cjs` 与 `scripts/db-backup.cjs` / `npm run db:backup`：通过 SQLite 在线 backup API 生成一致性副本，默认拒绝覆盖已有目标，副本执行 `PRAGMA integrity_check` 和迁移账本校验后才报告成功，源库以只读方式打开。
+- `test-db-migrations-backup.cjs` 先验证迁移 checksum 冲突和备份边界，再验证基线、重开幂等、源库哈希不变和覆盖保护；定向测试通过，`git diff --check` 通过。
+- 新增 `lib/db-recovery.cjs` 和 `scripts/db-restore-verify.cjs`，恢复只允许写入不存在的新目标，恢复后校验完整性、迁移账本和关键账号记录；目标已存在时拒绝覆盖。
+- 生产边界：尚未完成 Windows 10 定时/异地备份、加密存储、生产恢复切换、升级回滚或多实例共享迁移；这些仍不能标记为商用验收。
+
+## 2026-10-05 管理员密码恢复阶段
+
+- 先新增 `test-password-recovery.cjs`，在旧实现下按预期复现恢复存储/API 不存在的 RED；随后补齐最小受保护流程并保持现有登录、审批和初始化接口兼容。
+- 新增 `password_reset_tokens` 迁移（`0002.password-reset-tokens`）：活动超级管理员可为运营/主播签发短时一次性 token，数据库仅保存 SHA-256 摘要；同一目标重新签发会使旧 token 失效。
+- 新增 `POST /api/admin/users/:userId/password-reset` 和 `POST /api/auth/password-reset`。不提供手机号匿名申请，不允许为自己或其他最高权限账号发起；消费成功在同一事务内更新密码、标记 token 已消费、撤销目标账号全部会话并写入审计。
+- 审计只记录目标角色与撤销会话数量，既不记录密码也不记录原始 token；错误响应统一脱敏，恢复接口另有来源限流。
+- 定向验证：`node test-password-recovery.cjs`、`node test-db-migrations-backup.cjs`、`node test-auth-api.cjs`、`node test-user-management-api.cjs` 和 `git diff --check` 通过。Windows 实机恢复通知、管理员失联和多实例共享存储仍待后续验收。
+
+## 2026-10-05 Windows 10 局域网部署准备阶段
+
+- 先写 `test-windows-deploy-config.cjs`，覆盖 Node 版本、生产认证、独立数据库路径、端口/绑定地址、HTTPS Cookie 约束、Windows 路径和密钥不泄露；测试在缺脚本时先红，补齐后绿。
+- 新增 `lib/windows-deploy-config.cjs` 与 `scripts/windows-deploy-check.cjs`。校验只输出非敏感摘要和稳定错误码，不打印 API Key、Cookie 或请求正文；未配置生产变量时命令明确失败，不自动放宽认证。
+- 新增 `scripts/windows/start-huashu.ps1`、`stop-huashu.ps1` 及 `.cmd` 包装器。启动显式设置生产认证、独立数据库、监听地址和端口；停止默认只查看监听进程，`-Force` 前还要求进程命令行包含指定应用目录，避免误杀其他服务。
+- 部署检查会在进程环境未提供 Key 时，仅读取应用目录受保护 `.env.local` 的“是否已配置”状态，不返回或打印密钥；因此超级管理员保存配置后重启仍能通过启动前检查。
+- 定向验证：`node test-windows-deploy-config.cjs`、带合成环境变量的 `node scripts/windows-deploy-check.cjs`、`git diff --check` 通过；没有启动/重启服务或触碰 3102。
+- Windows 10 实机、服务托管、防火墙、HTTPS、断电恢复和升级回滚仍未验收；源码契约和 macOS 测试不等于 Windows 运行时通过。
+
+## 2026-10-05 Runtime 唯一入口阶段
+
+- 旧首页删除浏览器侧 `analyzeGoutoujunshi` 正式分析调用和 `relationshipState` 请求字段；页面只收集输入并渲染服务端返回的 Runtime 状态。
+- `/api/profile` 继续从当前账号、维护对象和 `sourceMessageId` 重建正式上下文；客户端提交的关系状态不作为权威输入。回归测试注入伪造核心标识后，GLM 请求仍使用服务端 `goutoujunshi` revision。
+- 新增并接入 `test-runtime-single-entry.cjs`，同步更新页面生成契约，保留 `algorithmCore`、回复偏好和历史重新生成能力。
+- 验证：`npm test` 实际发现并执行 95 项，全部通过；`node test-runtime-single-entry.cjs`、`node test-generation-contract.cjs`、`node test-api.cjs`、`git diff --check` 和独立副本 `npm run build` 均通过。
+- 本阶段没有真实智谱请求、浏览器端到端或 Windows 10 局域网实机验收；3102 服务未停止或重启。
+
+## 2026-10-05 Runtime UI 投影阶段
+
+- 发现旧首页仍会在服务端响应前把本地 `analyzeBrotherQuote` 写入正式分析状态，存在“本地预判冒充 Runtime 结果”的显示风险。
+- 新增 `lib/runtime-ui-projection.cjs`，只从服务端 `analysis` 优先、`relationshipState` 兼容回退生成旧首页展示字段，保留事实、未知、主目标、风险、情绪、行动、停止条件和算法标识。
+- 旧首页生成前清空正式分析；成功后只写入 Runtime 投影；失败时清空旧分析，不再保留上一轮关系状态。
+- 新增纯函数和页面契约测试；全量 `npm test` 实际发现并执行 97 项，全部通过；独立副本生产构建和 `git diff --check` 通过。
+- 本阶段仍未进行真实智谱调用、真实浏览器端到端或 Windows 10 局域网实机验收。
+
+## 当前阶段：回复历史 Runtime 上下文持久化（2026-10-05）
+
+目标：让每一批 AI 候选与生成时的 `goutoujunshi Runtime` 状态绑定保存，恢复历史时不再出现候选、当前消息和分析依据错配。
+
+- [completed] Task 1：新增 0003 SQLite migration，扩展 store/API 的 Runtime 五组字段并通过往返测试
+- [completed] Task 2：登录用户和游客候选历史保存完整上下文，恢复时还原 Runtime 面板、话题和邀请
+- [completed] Task 3：更新生产状态/测试文档，完成全量测试、差异检查和隔离生产构建
+
+### 本阶段验证证据
+
+- `test-chat-reply-history-runtime-context.cjs`、`test-chat-reply-history-runtime-ui.cjs`：通过。
+- `npm test`：99/99 通过；包含 migration、API 往返、访客归一化和 UI 恢复契约。
+- `git diff --check`：通过；隔离临时副本 `npm run build`：通过（未触碰当前 3102 和正式 SQLite）。
+- 真实浏览器刷新、真实智谱、Windows 10 数据库升级/回滚仍为 PENDING。
+
+## 当前阶段：浏览器回归安全前置（2026-10-05）
+
+目标：在真实浏览器回归开始前，阻断误连 3102、正式数据库和真实凭据，建立可审计的临时测试入口。
+
+- [completed] Task 1：为合法/危险环境编写 preflight RED 测试
+- [completed] Task 2：实现纯函数校验和 CLI，输出稳定错误码与脱敏摘要
+- [completed] Task 3：更新浏览器回归方案并完成定向验证
+- [completed] 全量回归与隔离生产构建
+
+### 本阶段验证证据
+
+- `test-browser-regression-preflight.cjs`：通过。
+- `npm test`：100/100 通过。
+- `git diff --check`：通过；隔离临时副本 `npm run build`：通过。
+- 真实浏览器交互仍为 PENDING；当前环境未启动临时端口，也未触碰 3102。
+
+## 当前阶段：Agent Browser 冒烟适配（2026-10-05）
+
+目标：把 preflight 后的真实浏览器登录页可达性检查做成默认关闭、显式启用、无凭据传递的可选执行器。
+
+- [completed] Task 1：编写 runner 安全契约测试
+- [completed] Task 2：实现 `npm run browser:smoke` 和隔离 session 生命周期
+- [completed] Task 3：全量回归、隔离构建和文档证据归档
+
+### 本阶段验证证据
+
+- `test-agent-browser-smoke-contract.cjs`：通过。
+- `npm test`：101/101 通过。
+- `git diff --check`：通过；隔离临时副本 `npm run build`：通过。
+- 真实执行分支返回 `AGENT_BROWSER_NOT_FOUND`，未伪造浏览器通过，也未启动或重启 3102。

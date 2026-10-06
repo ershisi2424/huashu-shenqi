@@ -1,0 +1,15 @@
+{
+  "version": "1.0.0",
+  "platform": "win32",
+  "arch": "x64",
+  "components": [
+    {
+      "id": "application",
+      "url": "https://downloads.example.invalid/huashu/application-1.0.0.zip",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "size": 1,
+      "relativePath": "application/application-1.0.0.zip",
+      "license": "MIT"
+    }
+  ]
+}

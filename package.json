@@ -2,13 +2,25 @@
   "name": "ai-reply-tool",
   "version": "1.0.0",
   "private": true,
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build",
     "start": "next start -p 3000",
     "bootstrap-admin": "node scripts/bootstrap-admin.cjs",
+    "db:backup": "node scripts/db-backup.cjs",
+    "db:restore:verify": "node scripts/db-restore-verify.cjs",
+    "windows:check": "node scripts/windows-deploy-check.cjs",
+    "windows:release": "node scripts/windows/build-release.cjs --output .artifacts/windows-release",
+    "windows:installer:check": "node test-windows-installer-script.cjs",
+    "windows:installer:compile": "node scripts/windows/installer/compile-installer.cjs",
+    "browser:preflight": "node scripts/browser-regression-preflight.cjs",
+    "browser:smoke": "node scripts/browser-regression/agent-browser-smoke.cjs",
     "smoke:ai-ocr": "node scripts/ai-ocr-smoke.cjs",
-    "test": "node test-chat-thread.cjs && node test-chat-brother-order.cjs && node test-chat-message-hydration.cjs && node test-chat-candidate-persistence.cjs && node test-chat-selection-no-refresh.cjs && node test-chat-local-store.cjs && node test-chat-scroll.cjs && node test-theme.cjs && node test-chat-ui.cjs && node test-chat-enhancements.cjs && node test-chat-enhancements-store.cjs && node test-chat-enhancements-api.cjs && node test-chat-enhancements-ui.cjs && node test-chat-workspace-state.cjs && node test-chat-reply-history-store.cjs && node test-chat-reply-history-api.cjs && node test-chat-anchor-isolation.cjs && node test-maintenance-task.cjs && node test-maintenance-task-store.cjs && node test-maintenance-task-api.cjs && node test-maintenance-task-ui.cjs && node test-super-admin-approval.cjs && node test-super-admin-approval-api.cjs && node test-super-admin-approval-ui.cjs && node test-ocr.cjs && node test-ocr-api.cjs && node test-auth-store.cjs && node test-user-management-store.cjs && node test-user-management-api.cjs && node test-audit-store.cjs && node test-audit-api.cjs && node test-audit-actors-api.cjs && node test-workspace-snapshot.cjs && node test-readonly-workspace-ui.cjs && node test-auth-api.cjs && node test-anchor-registration.cjs && node test-anchor-registration-api.cjs && node test-auth-ui.cjs && node test-admin-ui.cjs && node test-admin-settings-ui.cjs && node test-ai-ocr-smoke.cjs && node test-server-chat.cjs && node test-server-chat-api.cjs && node test-server-chat-ui.cjs && node test-core.cjs && node test-goutoujunshi-core.cjs && node test-goutoujunshi-runtime.cjs && node test-goutoujunshi-runtime-memory.cjs && node test-runtime-memory-api.cjs && node test-api.cjs && node test-generation-contract.cjs && node test-health.cjs && node test-memory.cjs && node test-knowledge-router.cjs && node test-request-budget.cjs && node test-1v1.cjs && node test-settings.cjs && node test-local-config.cjs && node test-settings-api.cjs && node test-ai-provider.cjs && node test-admin-settings-api.cjs && node test-launcher-env.cjs",
+    "pretest": "node test-service-worker.cjs && node test-approval-isolation.cjs",
+    "test": "node scripts/verify.cjs",
     "test:runtime": "node test-goutoujunshi-runtime.cjs && node test-goutoujunshi-runtime-memory.cjs && node test-runtime-memory-api.cjs && node test-api.cjs"
   },
   "dependencies": {

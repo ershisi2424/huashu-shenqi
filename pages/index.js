@@ -1,16 +1,26 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import Head from "next/head";
+import { normalizeBrothers } from "../lib/brother-storage";
+import { readMemoryState, writeMemoryState, updateMemorySection } from "../lib/local-memory";
+import { estimateProfileRequest } from "../lib/request-budget";
 import {
-  generateOne,
   personalities,
   getStats,
-  getScenarioList,
-  analyzeBrotherQuote,
-  generateOnePerPersonality,
   exportBrotherRecord,
 } from "../lib/generator";
+import { projectRuntimeAnalysis } from "../lib/runtime-ui-projection.cjs";
 
-const PERSONALITY_KEYS = Object.keys(personalities);
+const AI_REPLY_PREFERENCES = [
+  { key: "natural", label: "自然聊天", emoji: "🌿" },
+  { key: "warm", label: "温柔关心", emoji: "🌤️" },
+  { key: "humor", label: "轻松幽默", emoji: "😄" },
+  { key: "mature", label: "成熟克制", emoji: "🪴" },
+  { key: "flirty", label: "轻微暧昧", emoji: "✨" },
+  { key: "boundary", label: "边界清晰", emoji: "🧭" },
+  { key: "concise", label: "简短利落", emoji: "⚡" },
+  { key: "empathy", label: "高情商共情", emoji: "🫶" },
+];
+const AI_REPLY_PREFERENCE_MAP = Object.fromEntries(AI_REPLY_PREFERENCES.map(item => [item.key, item.label]));
 
 const ALL_EXAMPLES = [
   { msg: "在吗 想你了", hint: "开场" },
@@ -39,24 +49,12 @@ const TAB_HISTORY = "history";
 const TAB_FAV = "fav";
 const TAB_BROS = "bros";
 
-function loadJSON(key, fallback) {
-  try {
-    const s = (typeof window !== "undefined") && localStorage.getItem(key);
-    if (!s) return fallback;
-    return JSON.parse(s);
-  } catch (e) { return fallback; }
-}
-function saveJSON(key, val) {
-  try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {}
-}
-
 export default function Home() {
   const [message, setMessage] = useState("");
   const [selectedTags, setSelectedTags] = useState([]);
   const [results, setResults] = useState([]);
   const [analysis, setAnalysis] = useState(null);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [theme, setTheme] = useState("dark");
   const [copiedId, setCopiedId] = useState(null);
   const [intensity, setIntensity] = useState("auto");
   const [activeTab, setActiveTab] = useState(TAB_RESULT);
@@ -73,20 +71,69 @@ export default function Home() {
   const [activeBroId, setActiveBroId] = useState(null);
   // 🧠 新增：会话历史面板开关
   const [showSession, setShowSession] = useState(false);
+  const [storageReady, setStorageReady] = useState(false);
+  const [aiSources, setAiSources] = useState({ account: "", works: "", comments: "", statements: "" });
+  const [aiConsent, setAiConsent] = useState(false);
+  const [aiProfile, setAiProfile] = useState(null);
+  const [isAiGenerating, setIsAiGenerating] = useState(false);
+  const [aiError, setAiError] = useState("");
+  const [memoryEnabled, setMemoryEnabled] = useState(false);
+  const [memoryNotice, setMemoryNotice] = useState("");
+  const [zhipuHealth, setZhipuHealth] = useState(null);
+  const [apiHealthRefreshing, setApiHealthRefreshing] = useState(false);
+  const [apiHealthError, setApiHealthError] = useState("");
+  const [requestBudget, setRequestBudget] = useState(null);
+
+  const persistMemory = useCallback((section, value) => {
+    try {
+      updateMemorySection(localStorage, section, value);
+    } catch {
+      setMemoryNotice("本机存储失败，当前内容未保存");
+      return false;
+    }
+    return true;
+  }, []);
+
+  const refreshZhipuHealth = useCallback(async () => {
+    setApiHealthRefreshing(true);
+    setApiHealthError("");
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_BASE_PATH || ""}/api/health/`, { cache: "no-store" });
+      if (!response.ok) throw new Error(`HTTP_${response.status}`);
+      const payload = await response.json();
+      setZhipuHealth(payload);
+      return payload;
+    } catch {
+      setApiHealthError("暂时无法读取服务端状态，请确认 Next.js 服务仍在运行");
+      setZhipuHealth((current) => current || { status: "unreachable" });
+      return null;
+    } finally {
+      setApiHealthRefreshing(false);
+    }
+  }, []);
 
   const textareaRef = useRef(null);
+  const aiPanelRef = useRef(null);
+  const memoryFileRef = useRef(null);
 
   const stats = useMemo(() => getStats(), []);
-  const scenarioList = useMemo(() => getScenarioList(), []);
 
   useEffect(() => {
-    const savedTheme = localStorage.getItem("theme");
-    if (savedTheme) setTheme(savedTheme);
-    setHistory(loadJSON("hh_history", []));
-    setFav(loadJSON("hh_fav", []));
-    setBrothers(loadJSON("hh_brothers", []));
+    const savedMemory = localStorage.getItem("hh_memory_enabled") === "true";
+    setMemoryEnabled(savedMemory);
+    let savedMemoryState = { history: [], favorites: [], brothers: [], preferences: {} };
+    if (savedMemory) {
+      try {
+        savedMemoryState = readMemoryState(localStorage);
+        setHistory(savedMemoryState.history);
+        setFav(savedMemoryState.favorites);
+        setBrothers(normalizeBrothers(savedMemoryState.brothers));
+      } catch {
+        setMemoryNotice("本机记忆格式无法读取，已保持为空");
+      }
+    }
     // 🧠 记忆：加载用户偏好设置
-    const savedPrefs = loadJSON("hh_prefs", {});
+    const savedPrefs = savedMemory ? savedMemoryState.preferences : {};
     if (savedPrefs.selectedTags) setSelectedTags(savedPrefs.selectedTags);
     if (savedPrefs.intensity) setIntensity(savedPrefs.intensity);
     if (savedPrefs.broNickname) setBroNickname(savedPrefs.broNickname);
@@ -94,13 +141,23 @@ export default function Home() {
     // 🧠 记忆：恢复上次选中的大哥（独立会话）
     if (savedPrefs.activeBroId) {
       setActiveBroId(savedPrefs.activeBroId);
-      const bro = loadJSON("hh_brothers", []).find(b => b.id === savedPrefs.activeBroId);
+      const bro = savedMemoryState.brothers.find(b => b.id === savedPrefs.activeBroId);
       if (bro) {
         setBroNickname(bro.nickname || "");
         if (bro.address) setBroAddress(bro.address);
+        if (bro.aiProfile) setAiProfile(bro.aiProfile);
       }
     }
+    setStorageReady(true);
   }, []);
+
+  useEffect(() => {
+    refreshZhipuHealth();
+  }, [refreshZhipuHealth]);
+
+  useEffect(() => {
+    if (storageReady && memoryEnabled) persistMemory("brothers", brothers);
+  }, [brothers, storageReady, memoryEnabled, persistMemory]);
 
   useEffect(() => {
     const tick = () => {
@@ -113,10 +170,6 @@ export default function Home() {
     return () => clearInterval(t);
   }, []);
 
-  useEffect(() => {
-    document.documentElement.setAttribute("data-theme", theme);
-    localStorage.setItem("theme", theme);
-  }, [theme]);
 
   useEffect(() => {
     const onVis = () => {
@@ -136,11 +189,11 @@ export default function Home() {
     };
   }, []);
 
-  // 🧠 记忆：自动保存用户偏好（性格/浓度/称呼/当前大哥）
+  // 🧠 记忆：自动保存用户偏好（回复风格/浓度/称呼/当前大哥）
   useEffect(() => {
     const prefs = { selectedTags, intensity, broNickname, broAddress, activeBroId };
-    saveJSON("hh_prefs", prefs);
-  }, [selectedTags, intensity, broNickname, broAddress, activeBroId]);
+    if (memoryEnabled) persistMemory("preferences", prefs);
+  }, [selectedTags, intensity, broNickname, broAddress, activeBroId, memoryEnabled, persistMemory]);
 
   // 🧠 核心：检测备注名变化 → 自动切换/新建独立会话
   const prevNicknameRef = useRef("");
@@ -169,7 +222,7 @@ export default function Home() {
     prevNicknameRef.current = currentNick;
   }, [broNickname]);
 
-  const pushHistory = useCallback((msg, tags, arr) => {
+  const pushHistory = useCallback((msg, tags, arr, analysisOverride = null, metadata = {}) => {
     const record = {
       id: Date.now() + "" + Math.random().toString(36).slice(2, 6),
       ts: Date.now(),
@@ -179,14 +232,18 @@ export default function Home() {
         label: r.label, emoji: r.emoji, scenario: r.scenario,
         text: r.text,
       })),
-      analysis: arr._analysis || null,
+      analysis: analysisOverride || arr._analysis || null,
+      aiSources: metadata.aiSources || null,
+      context: Array.isArray(metadata.context) ? metadata.context.slice(0, 10) : [],
+      broNickname: metadata.broNickname || "",
+      broAddress: metadata.broAddress || "",
     };
     setHistory(prev => {
       const next = [record, ...prev].slice(0, 20);
-      saveJSON("hh_history", next);
+      if (memoryEnabled) persistMemory("history", next);
       return next;
     });
-  }, []);
+  }, [memoryEnabled, persistMemory]);
 
   const toggleFav = useCallback((row) => {
     setFav(prev => {
@@ -201,14 +258,13 @@ export default function Home() {
           text: row.text, sourceMsg: message,
         }, ...prev].slice(0, 50);
       }
-      saveJSON("hh_fav", next);
+      if (memoryEnabled) persistMemory("favorites", next);
       return next;
     });
-  }, [message]);
+  }, [message, memoryEnabled, persistMemory]);
 
   const favContains = (row) => fav.some(f => f.text === row.text && f.label === row.label);
 
-  const toggleTheme = () => setTheme(p => p === "dark" ? "light" : "dark");
   const toggleTag = (key) => setSelectedTags(prev =>
     prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
 
@@ -227,6 +283,8 @@ export default function Home() {
     setActiveBroId(broId);
     setBroNickname(bro.nickname || "");
     if (bro.address) setBroAddress(bro.address);
+    setAiProfile(bro.aiProfile || null);
+    setAiError("");
     // 自动填充历史上下文到输入框下方
     setShowSession(true);
   };
@@ -240,6 +298,10 @@ export default function Home() {
     setResults([]);
     setAnalysis(null);
     setShowSession(false);
+    setAiProfile(null);
+    setAiSources({ account: "", works: "", comments: "", statements: "" });
+    setAiConsent(false);
+    setAiError("");
   };
 
   // 🧠 获取当前大哥的独立会话历史（按 nickname 查找，确保隔离）
@@ -260,62 +322,12 @@ export default function Home() {
     }));
   };
 
-  // 统一生成逻辑（按大哥隔离上下文）
-  const handleGenerate = (msgOverride) => {
-    const msg = getMsg(msgOverride);
-    if (!msg || isGenerating) return;
-    setIsGenerating(true);
-    setResults([]);
-    setAnalysis(null);
-    setActiveTab(TAB_RESULT);
-    setTimeout(() => {
-      try {
-        // 🧠 核心：只取当前大哥的会话作为上下文（隔离！）
-        const broContext = getCurrentBroContext();
-
-        const opts = {
-          brotherName: broNickname.trim() || undefined,
-          address: broAddress.trim() || undefined,
-          intensity: intensity === "auto" ? undefined : intensity,
-          context: broContext, // 只传当前大哥的历史
-        };
-        const broAnalysis = analyzeBrotherQuote(msg, opts);
-        const replies = generateOnePerPersonality(msg, opts);
-        const analysisResult = replies._analysis || broAnalysis;
-        // 🧠 记忆：把上下文标签注入到 analysis 中
-        if (replies._contextualTags) {
-          analysisResult._contextualTags = replies._contextualTags;
-        }
-        setAnalysis(analysisResult);
-
-        // 如果选了特定性格，只显示选中的；否则显示全部 8 条
-        const filtered = selectedTags.length > 0
-          ? replies.filter(r => selectedTags.includes(r.personality))
-          : replies;
-        const finalResults = filtered.length > 0 ? filtered : replies;
-        // 🧠 保留 _contextualTags
-        if (replies._contextualTags && !finalResults._contextualTags) {
-          finalResults._contextualTags = replies._contextualTags;
-        }
-        setResults(finalResults);
-        pushHistory(msg, selectedTags.length > 0 ? selectedTags : PERSONALITY_KEYS, finalResults);
-
-        // 🧠 核心更新：把这条对话追加到当前大哥的独立会话中
-        const bestReply = finalResults[0]?.text || "";
-        appendBroSession(msg, analysisResult, bestReply);
-
-      } catch (err) {
-        console.error("生成失败:", err);
-        setResults([]);
-      } finally {
-        setIsGenerating(false);
-      }
-    }, 380);
-  };
+  // 所有生成入口都先完成关系目标判断，再由智谱 GLM-5.3 直接原创回复。
+  const handleGenerate = () => handleAiGenerate();
 
   // 🧠 向当前大哥的会话追加一条记录（独立存储，按 nickname 严格隔离）
-  const appendBroSession = (msg, analysis, reply) => {
-    const nickname = broNickname.trim();
+  const appendBroSession = (msg, analysis, reply, generatedResults = [], nicknameOverride = broNickname, addressOverride = broAddress) => {
+    const nickname = nicknameOverride.trim();
     if (!nickname) return;
 
     setBrothers(prev => {
@@ -349,17 +361,20 @@ export default function Home() {
         scenarioStats[scenarioKey] = (scenarioStats[scenarioKey] || 0) + 1;
         const typeStats = { ...(existing.typeStats || {}) };
         typeStats[brotherType] = (typeStats[brotherType] || 0) + 1;
-        const topPersonalities = results_ref.current?.slice(0, 3).map(r => r.personality) || [];
-        const bestPersonalities = [...new Set([...topPersonalities, ...(existing.bestPersonalities || [])])].slice(0, 5);
+        const topStyles = generatedResults.slice(0, 3).map(r => r.label).filter(Boolean);
+        const bestStyles = [...new Set([...topStyles, ...(existing.bestStyles || [])])].slice(0, 5);
         const updated = {
           ...existing,
           sessions,
           scenarioStats,
           typeStats,
-          bestPersonalities,
+          bestStyles,
           lastInteraction: Date.now(),
           interactionCount: (existing.interactionCount || 0) + 1,
-          address: existing.address || broAddress.trim(),
+          address: addressOverride.trim() || existing.address,
+          brotherMessage: msg,
+          analysis,
+          replies: generatedResults,
         };
         // 更新当前激活的大哥
         setTimeout(() => setActiveBroId(existing.id), 0);
@@ -369,14 +384,17 @@ export default function Home() {
         const newBro = {
           id: "bro_" + Date.now().toString(36),
           nickname,
-          address: broAddress.trim(),
+          address: addressOverride.trim(),
           sessions: [sessionEntry],
           scenarioStats: { [scenarioKey]: 1 },
           typeStats: { [brotherType]: 1 },
-          bestPersonalities: [],
+          bestStyles: generatedResults.slice(0, 3).map(r => r.label).filter(Boolean),
           lastInteraction: Date.now(),
           interactionCount: 1,
           createdAt: Date.now(),
+          brotherMessage: msg,
+          analysis,
+          replies: generatedResults,
         };
         setTimeout(() => setActiveBroId(newBro.id), 0);
         return [newBro, ...prev].slice(0, 200);
@@ -384,23 +402,110 @@ export default function Home() {
     });
   };
 
-  // 用一个 ref 缓存最新 results 供 appendBroSession 使用
-  const results_ref = useRef(results);
-  useEffect(() => { results_ref.current = results; }, [results]);
+  const runAiGeneration = async ({
+    messageOverride = "",
+    contextOverride = null,
+    nicknameOverride = broNickname,
+    addressOverride = broAddress,
+    sourcesOverride = null,
+  } = {}) => {
+    const msg = getMsg(messageOverride);
+    if (isGenerating || isAiGenerating) return;
+    if (!msg) return setAiError("请先输入对方当前发言");
+    if (!aiConsent) {
+      if (aiPanelRef.current) aiPanelRef.current.open = true;
+      return setAiError("所有回复都由智谱 GLM-5.3 原创生成，请先确认素材授权");
+    }
 
-  const handleRegenOne = (pk) => {
-    const msg = getMsg();
-    if (!msg) return;
-    const opts = {
-      brotherName: broNickname.trim() || undefined,
-      address: broAddress.trim() || undefined,
-      intensity: intensity === "auto" ? undefined : intensity,
-    };
-    const replies = generateOnePerPersonality(msg, opts);
-    const fresh = replies.find(r => r.personality === pk);
-    if (!fresh) return;
-    setResults(prev => prev.map(r => r.personality === pk ? fresh : r));
+    setIsAiGenerating(true);
+    setIsGenerating(true);
+    setAiError("");
+    setResults([]);
+    setRequestBudget(null);
+    setActiveTab(TAB_RESULT);
+    try {
+      const broContext = Array.isArray(contextOverride) ? contextOverride : getCurrentBroContext();
+      const sources = sourcesOverride && typeof sourcesOverride === "object" ? sourcesOverride : aiSources;
+      const contextualTags = {
+        hasHistory: broContext.length > 0,
+        contextCount: broContext.length,
+      };
+      // Formal analysis is server-owned. Clear the previous result while the
+      // request is pending so an old relationship state cannot look current.
+      setAnalysis(null);
+      setRequestBudget(estimateProfileRequest({
+        ...sources,
+        currentMessage: msg,
+        history: broContext,
+        replyCount: 8,
+      }));
+
+      const replyPreferences = selectedTags.length
+        ? selectedTags.map(key => AI_REPLY_PREFERENCE_MAP[key] || personalities[key]?.label || key)
+        : ["自然聊天", "温柔关心", "轻松幽默", "成熟克制"];
+
+      const response = await fetch(`${process.env.NEXT_PUBLIC_BASE_PATH || ""}/api/profile/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...sources,
+          currentMessage: msg,
+          history: broContext,
+          replyCount: 8,
+          replyPreferences,
+          consent: true,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "AI 分析失败");
+
+      const projectedAnalysis = projectRuntimeAnalysis(payload);
+      if (!projectedAnalysis) throw new Error("AI 分析结果缺少 Runtime 状态");
+      projectedAnalysis._contextualTags = contextualTags;
+      const aiReplies = (payload.replies || []).map((row, i) => {
+        return {
+          personality: `ai_${i}`,
+          label: row.style || `GLM-5.3 回复 ${i + 1}`,
+          emoji: "🤖",
+          scenarioKey: projectedAnalysis.scenarioKey,
+          scenario: "GLM-5.3 原创回复",
+          intensity: projectedAnalysis.crossLine ? "warmup" : "daily",
+          text: row.text,
+          rationale: row.rationale,
+          sendWhen: row.sendWhen,
+          branches: row.branches,
+          observationWindow: row.observationWindow,
+          stopCondition: row.stopCondition,
+          isAI: true,
+        };
+      });
+      setAiProfile(payload);
+      setAnalysis(projectedAnalysis);
+      setResults(aiReplies);
+      pushHistory(msg, ["ai_direct"], aiReplies, projectedAnalysis, {
+        aiSources: sources,
+        context: broContext,
+        broNickname: nicknameOverride,
+        broAddress: addressOverride,
+      });
+      appendBroSession(msg, projectedAnalysis, aiReplies[0]?.text || "", aiReplies, nicknameOverride, addressOverride);
+      const nickname = nicknameOverride.trim();
+      if (nickname) {
+        setBrothers(prev => prev.map(b => b.nickname === nickname ? { ...b, aiProfile: payload } : b));
+      }
+    } catch (error) {
+      if (aiPanelRef.current) aiPanelRef.current.open = true;
+      // Do not retain a relationship state from a previous server response
+      // when this generation fails.
+      setAnalysis(null);
+      setAiError(error.message || "AI 分析失败");
+    } finally {
+      setIsAiGenerating(false);
+      setIsGenerating(false);
+    }
   };
+
+  const handleAiGenerate = () => runAiGeneration();
 
   const handleCopy = async (text, id) => {
     try { await navigator.clipboard.writeText(text); }
@@ -428,6 +533,7 @@ export default function Home() {
     if (textareaRef.current) textareaRef.current.value = ex.msg;
     setResults([]);
     setAnalysis(null);
+    setRequestBudget(null);
     setActiveTab(TAB_RESULT);
   };
 
@@ -446,13 +552,22 @@ export default function Home() {
   const handleSaveBrother = () => {
     const msg = getMsg();
     if (!msg || results.length === 0) return;
-    const id = "bro_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const nickname = broNickname.trim() || analysis?.suggestAddress || "哥";
+    const existing = brothers.find(b => b.id === activeBroId) || brothers.find(b => b.nickname === nickname);
+    const id = existing?.id || "bro_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const record = {
-      id, ts: Date.now(),
-      nickname: broNickname.trim() || analysis?.suggestAddress || "哥",
+      id, ts: existing?.ts || Date.now(),
+      nickname,
       brotherMessage: msg,
       address: broAddress,
       analysis,
+      aiProfile: aiProfile || existing?.aiProfile || null,
+      aiSources: { ...aiSources },
+      memoryMeta: {
+        source: aiProfile?.profile?.evidence?.map(item => item.source).filter(Boolean).slice(0, 8) || ["主播手动输入"],
+        confidence: Number.isFinite(aiProfile?.profile?.confidence) ? aiProfile.profile.confidence : 0,
+        savedAt: Date.now(),
+      },
       replies: results.map(r => ({
         personality: r.personality, label: r.label, emoji: r.emoji,
         scenario: r.scenario, scenarioKey: r.scenarioKey,
@@ -460,10 +575,11 @@ export default function Home() {
       })),
     };
     setBrothers(prev => {
-      const next = [record, ...prev].slice(0, 200);
-      saveJSON("hh_brothers", next);
-      return next;
+      const idx = prev.findIndex(b => b.id === id);
+      if (idx < 0) return [{ ...record, sessions: [] }, ...prev].slice(0, 200);
+      return prev.map((b, i) => i === idx ? { ...b, ...record, sessions: b.sessions || [] } : b);
     });
+    setActiveBroId(id);
     setBroDetailId(id);
     setActiveTab(TAB_BROS);
   };
@@ -489,28 +605,157 @@ export default function Home() {
     }
   };
 
-  const clearHistory = () => { setHistory([]); saveJSON("hh_history", []); };
-  const clearFav = () => { setFav([]); saveJSON("hh_fav", []); };
+  const clearHistory = () => { setHistory([]); if (memoryEnabled) persistMemory("history", []); };
+  const removeHistory = (id) => {
+    setHistory(prev => { const next = prev.filter(item => item.id !== id); if (memoryEnabled) persistMemory("history", next); return next; });
+  };
+  const clearFav = () => { setFav([]); if (memoryEnabled) persistMemory("favorites", []); };
   const removeFav = (fid) => {
-    setFav(prev => { const n = prev.filter(f => f.id !== fid); saveJSON("hh_fav", n); return n; });
+    setFav(prev => { const n = prev.filter(f => f.id !== fid); if (memoryEnabled) persistMemory("favorites", n); return n; });
   };
   const handleBroDelete = (bid) => {
-    setBrothers(prev => { const n = prev.filter(b => b.id !== bid); saveJSON("hh_brothers", n); return n; });
+    setBrothers(prev => { const n = prev.filter(b => b.id !== bid); if (memoryEnabled) persistMemory("brothers", n); return n; });
     if (broDetailId === bid) setBroDetailId(null);
+    if (activeBroId === bid) {
+      setActiveBroId(null);
+      setAiProfile(null);
+    }
   };
+  const handleHistoryRegenerate = (record) => {
+    setMessage(record.msg || "");
+    if (textareaRef.current) textareaRef.current.value = record.msg || "";
+    setBroNickname(record.broNickname || broNickname);
+    setBroAddress(record.broAddress || broAddress);
+    if (record.aiSources) setAiSources(record.aiSources);
+    setResults([]);
+    setAnalysis(record.analysis || null);
+    setActiveTab(TAB_RESULT);
+    runAiGeneration({
+      messageOverride: record.msg || "",
+      contextOverride: record.context || [],
+      nicknameOverride: record.broNickname || broNickname,
+      addressOverride: record.broAddress || broAddress,
+      sourcesOverride: record.aiSources || aiSources,
+    });
+  };
+
   const handleBroRestore = (rec) => {
     setMessage(rec.brotherMessage || "");
     if (textareaRef.current) textareaRef.current.value = rec.brotherMessage || "";
     setBroNickname(rec.nickname || "");
     setBroAddress(rec.address || "");
-    setResults(rec.replies || []);
+    if (rec.aiSources) setAiSources(rec.aiSources);
+    setResults([]);
     setAnalysis(rec.analysis || null);
     setBroDetailId(rec.id);
     setActiveTab(TAB_RESULT);
+    runAiGeneration({
+      messageOverride: rec.brotherMessage || "",
+      contextOverride: Array.isArray(rec.sessions) ? rec.sessions.slice(0, 10).map((session) => ({ msg: session.msg, reply: session.reply, ts: session.ts })) : [],
+      nicknameOverride: rec.nickname || "",
+      addressOverride: rec.address || "",
+      sourcesOverride: rec.aiSources || aiSources,
+    });
   };
   const clearBrothers = () => {
     if (!confirm("确定清空所有大哥档案吗？")) return;
-    setBrothers([]); saveJSON("hh_brothers", []);
+    setBrothers([]); if (memoryEnabled) persistMemory("brothers", []);
+    setActiveBroId(null);
+    setBroDetailId(null);
+    setAiProfile(null);
+  };
+
+  const enableMemory = () => {
+    try {
+      writeMemoryState(localStorage, { version: 2, history, favorites: fav, brothers, preferences: { selectedTags, intensity, broNickname, broAddress, activeBroId } });
+      localStorage.setItem("hh_memory_enabled", "true");
+      setMemoryEnabled(true);
+      setMemoryNotice("本地记忆已启用");
+    } catch {
+      setMemoryNotice("本机存储失败，本地记忆未启用");
+    }
+  };
+  const disableMemory = () => {
+    if (!confirm("暂停并清空本机记忆？当前页面内容不会自动发送，但历史、收藏和档案将从本机删除。")) return;
+    let failed = false;
+    ["hh_memory_enabled", "hh_memory_v2", "hh_history", "hh_fav", "hh_brothers", "hh_prefs"].forEach((key) => {
+      try { localStorage.removeItem(key); } catch { failed = true; }
+    });
+    setMemoryEnabled(false);
+    setHistory([]); setFav([]); setBrothers([]); setActiveBroId(null); setAiProfile(null);
+    setMemoryNotice(failed ? "部分本机记忆未能清除" : "");
+  };
+  const exportMemory = () => {
+    if (!memoryEnabled) return;
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      version: 1,
+      history,
+      favorites: fav,
+      brothers,
+      preferences: readMemoryState(localStorage).preferences,
+    };
+    try {
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `huashu-local-memory-${new Date().toISOString().slice(0, 10)}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      setMemoryNotice("已导出本地记忆文件");
+    } catch (error) {
+      setMemoryNotice("导出失败，数据仍保留在本机");
+    }
+  };
+  const importMemory = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (!memoryEnabled) {
+      setMemoryNotice("请先启用本地记忆，再导入备份");
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setMemoryNotice("备份文件超过 2 MB，未导入");
+      return;
+    }
+    try {
+      const parsed = JSON.parse(await file.text());
+      if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.history) || !Array.isArray(parsed.favorites) || !Array.isArray(parsed.brothers)) {
+        throw new Error("INVALID_BACKUP");
+      }
+      const importedHistory = parsed.history.filter(item => item && typeof item.msg === "string").slice(0, 20);
+      const importedFav = parsed.favorites.filter(item => item && typeof item.text === "string").slice(0, 50);
+      const importedBrothers = normalizeBrothers(parsed.brothers.filter(item => item && typeof item === "object")).slice(0, 200);
+      const importedPrefs = parsed.preferences && typeof parsed.preferences === "object" ? {
+        selectedTags: Array.isArray(parsed.preferences.selectedTags) ? parsed.preferences.selectedTags.slice(0, 8) : [],
+        intensity: typeof parsed.preferences.intensity === "string" ? parsed.preferences.intensity : "auto",
+        broNickname: typeof parsed.preferences.broNickname === "string" ? parsed.preferences.broNickname.slice(0, 16) : "",
+        broAddress: typeof parsed.preferences.broAddress === "string" ? parsed.preferences.broAddress.slice(0, 12) : "",
+        activeBroId: typeof parsed.preferences.activeBroId === "string" ? parsed.preferences.activeBroId : null,
+      } : {};
+      try {
+        writeMemoryState(localStorage, {
+          version: 2,
+          history: importedHistory,
+          favorites: importedFav,
+          brothers: importedBrothers,
+          preferences: importedPrefs,
+        });
+      } catch {
+        throw new Error("WRITE_FAILED");
+      }
+      setHistory(importedHistory); setFav(importedFav); setBrothers(importedBrothers);
+      if (importedPrefs.selectedTags) setSelectedTags(importedPrefs.selectedTags);
+      if (importedPrefs.intensity) setIntensity(importedPrefs.intensity);
+      if (importedPrefs.broNickname !== undefined) setBroNickname(importedPrefs.broNickname);
+      if (importedPrefs.broAddress !== undefined) setBroAddress(importedPrefs.broAddress);
+      if (importedPrefs.activeBroId) setActiveBroId(importedPrefs.activeBroId);
+      setMemoryNotice(`已导入 ${importedHistory.length} 条历史、${importedBrothers.length} 个档案`);
+    } catch (error) {
+      setMemoryNotice(error?.message === "WRITE_FAILED" ? "本机存储失败，备份未导入" : "备份格式无法识别，未导入任何数据");
+    }
   };
 
   const charCount = message.length;
@@ -527,9 +772,6 @@ export default function Home() {
           <div className="logo-icon">💠</div>
           <span className="logo-text">大哥维护神器</span>
         </div>
-        <button className="theme-toggle" onClick={toggleTheme} aria-label="切换主题">
-          {theme === "dark" ? "☀️" : "🌙"}
-        </button>
       </header>
 
       <div className="sys-status">
@@ -540,14 +782,37 @@ export default function Home() {
         <span className="sys-sep hide-sm">|</span>
         <span className="sys-info hide-xs">模板 {stats.templates.toLocaleString()}</span>
         <span className="sys-sep hide-xs">|</span>
-        <span className="sys-info hide-xs">AI分 {stats.qualityCoverage}%</span>
+        <span className="sys-info hide-xs">模板质量 {stats.qualityCoverage}%</span>
+        <span className="sys-sep hide-sm">|</span>
+        <span className={`sys-info zhipu-health ${zhipuHealth?.status === "configured" ? "ready" : "needs-config"}`} title={zhipuHealth?.baseUrl || "等待服务端状态"}>
+          智谱 {zhipuHealth?.status === "configured" ? "已读取配置" : zhipuHealth?.status === "unreachable" ? "不可达" : "待配置"}
+        </span>
         <span className="sys-sep">|</span>
         <span className="sys-time">{now || "--:--"}</span>
       </div>
 
+      <section className="api-settings api-settings-readonly" aria-label="智谱 AI 服务状态">
+        <div className="api-settings-status-row">
+          <div>
+            <strong>⚙️ 智谱 AI 服务</strong>
+            <span>{zhipuHealth?.status === "configured" ? "服务端已读取配置，AI 功能可继续使用" : zhipuHealth?.status === "unreachable" ? "暂时无法读取服务状态" : "尚未配置服务端 AI Key"}</span>
+          </div>
+          <button type="button" className="secondary-btn" onClick={refreshZhipuHealth} disabled={apiHealthRefreshing}>
+            {apiHealthRefreshing ? "检查中…" : "重新检查"}
+          </button>
+        </div>
+        <div className="api-settings-grid">
+          <div><span>服务商</span><strong>智谱 AI</strong></div>
+          <div><span>模型</span><strong>{zhipuHealth?.model || "glm-5.3"}</strong></div>
+          <div><span>接口地址</span><strong>{zhipuHealth?.baseUrl || "https://open.bigmodel.cn/api/paas/v4"}</strong></div>
+        </div>
+        <p className="api-settings-note">API 配置由超级管理员统一维护。主播和运营无需填写 Key；如需修改，请进入后台的“服务配置”。</p>
+        {apiHealthError && <p className="api-settings-error">{apiHealthError}</p>}
+      </section>
+
       <div className="hero">
         <h1>私聊维护话术生成器</h1>
-        <p className="hero-sub">AI记忆 · 每个大哥独立聊天框 · 8种性格高情商回复</p>
+        <p className="hero-sub">AI记忆 · 每个大哥独立聊天框 · GLM-5.3 多元原创回复</p>
       </div>
 
       {/* 🧠 大哥选择器（独立会话入口） */}
@@ -624,9 +889,9 @@ export default function Home() {
           defaultValue=""
           maxLength={800}
           placeholder={"把大哥发来的消息粘到这里...\n\n例如：\n在吗 想你了\n刚给你刷了520 想你了\n能借我3万块吗\n今天被老板骂了 好累\n点歌 唱一首给我听"}
-          onInput={(e) => setMessage(e.target.value)}
-          onCompositionEnd={(e) => setMessage(e.target.value)}
-          onBlur={(e) => setMessage(e.target.value)}
+          onInput={(e) => { setMessage(e.target.value); setRequestBudget(null); }}
+          onCompositionEnd={(e) => { setMessage(e.target.value); setRequestBudget(null); }}
+          onBlur={(e) => { setMessage(e.target.value); setRequestBudget(null); }}
         />
         <div className="input-meta">
           <button className="clear-btn" onClick={handleClear} disabled={!message}>✕ 清空</button>
@@ -645,19 +910,19 @@ export default function Home() {
         ))}
       </div>
 
-      {/* 性格选择（可选） */}
+      {/* 风格偏好（可选） */}
       <div className="section-label">
-        🎭 选择性格（可选，不选则出全部 8 种）
+        🎭 AI 回复风格偏好（可选，不选则由 GLM-5.3 自动生成多元风格）
         {selectedTags.length > 0 && <span className="badge-soft">已选 {selectedTags.length}</span>}
       </div>
       <div className="tags">
-        {PERSONALITY_KEYS.map(key => (
+        {AI_REPLY_PREFERENCES.map(({ key, label, emoji }) => (
           <button
             key={key}
             className={`tag ${selectedTags.includes(key) ? "active" : ""}`}
             onClick={() => toggleTag(key)}
           >
-            {personalities[key].emoji} {personalities[key].label}
+            {emoji} {label}
           </button>
         ))}
       </div>
@@ -668,6 +933,25 @@ export default function Home() {
       </button>
       {showAdvanced && (
         <div className="advanced-panel">
+          <div className="memory-consent-box">
+            <div className="memory-consent-head">
+              <strong>本地记忆</strong>
+              <span className={memoryEnabled ? "memory-status enabled" : "memory-status"}>{memoryEnabled ? "已启用" : "未启用"}</span>
+            </div>
+            <p>只保存在本机浏览器，用于历史、收藏和大哥档案；不会自动上传到智谱。可随时暂停并清空。</p>
+            {memoryEnabled ? (
+              <div className="memory-actions">
+                <button className="bulk-btn" onClick={exportMemory}>导出本地记忆</button>
+                <button className="bulk-btn" onClick={() => memoryFileRef.current?.click()}>导入本地记忆</button>
+                <button className="link-btn danger" onClick={disableMemory}>暂停并清空</button>
+                <input ref={memoryFileRef} type="file" accept="application/json,.json" onChange={importMemory} hidden />
+              </div>
+            ) : (
+              <button className="bulk-btn" onClick={enableMemory}>启用本地记忆</button>
+            )}
+            {memoryEnabled && <div className="memory-count">{history.length} 条历史 · {fav.length} 条收藏 · {brothers.length} 个档案</div>}
+            {memoryNotice && <div className="memory-notice">{memoryNotice}</div>}
+          </div>
           <label className="bro-meta-item">
             <span>怎么称呼他</span>
             <input
@@ -696,13 +980,54 @@ export default function Home() {
         </div>
       )}
 
+      <details ref={aiPanelRef} className="ai-source-panel">
+        <summary>🤖 智谱 GLM-5.3 原创回复·画像素材</summary>
+        <div className="ai-source-body">
+          <p className="privacy-note">
+            仅粘贴你有权使用的公开或已授权文本。原创回复遵循“真诚、有分寸、具体关心、尊重边界”，不使用欲擒故纵、唯一感、情感依赖或诱导送礼。
+          </p>
+          <label className="bro-meta-item">
+            <span>抖音账号备注（可选）</span>
+            <input value={aiSources.account} maxLength={80} placeholder="昵称 / 抖音号，不要填手机号" onChange={(e) => setAiSources(p => ({ ...p, account: e.target.value }))} />
+          </label>
+          <div className="ai-source-grid">
+            <label>
+              <span>近期作品文案</span>
+              <textarea value={aiSources.works} maxLength={6000} placeholder="每条一行，可带发布时间" onChange={(e) => setAiSources(p => ({ ...p, works: e.target.value }))} />
+            </label>
+            <label>
+              <span>近期评论</span>
+              <textarea value={aiSources.comments} maxLength={6000} placeholder="粘贴他本人发布的评论" onChange={(e) => setAiSources(p => ({ ...p, comments: e.target.value }))} />
+            </label>
+            <label>
+              <span>公开发言 / 聊天片段</span>
+              <textarea value={aiSources.statements} maxLength={6000} placeholder="粘贴发言，请先删除手机号、地址等信息" onChange={(e) => setAiSources(p => ({ ...p, statements: e.target.value }))} />
+            </label>
+          </div>
+          <label className="consent-row">
+            <input type="checkbox" checked={aiConsent} onChange={(e) => setAiConsent(e.target.checked)} />
+            <span>我确认有权使用输入和可选素材，并同意将关系状态与授权素材发送给智谱 GLM-5.3 进行画像分析和原创回复生成。</span>
+          </label>
+          {aiError && <div className="ai-error">{aiError}</div>}
+          {requestBudget && (
+            <div className={`request-budget ${requestBudget.sizeBand === "large" ? "large" : ""}`}>
+              <strong>本次请求估算：</strong>{requestBudget.replyCount} 条原创回复 · {requestBudget.sourceChars} 字素材 · 约 {requestBudget.approxInputTokens} Tokens
+              <span>仅按本地 JSON 长度估算，不代表智谱最终计费</span>
+            </div>
+          )}
+          <button className="ai-generate-btn" onClick={handleAiGenerate} disabled={isGenerating || isAiGenerating}>
+            {isAiGenerating ? "🧠 GLM-5.3 正在原创生成…" : "🤖 用 GLM-5.3 生成多元回复"}
+          </button>
+        </div>
+      </details>
+
       {/* 生成按钮 */}
       <button
         className={"generate-btn " + (docked ? "only-desktop" : "")}
         onClick={() => handleGenerate()}
         disabled={isGenerating}
       >
-        {isGenerating ? "🔍 正在识别 + 生成回复..." : "✨ 生成回复"}
+        {isGenerating ? "🧠 GLM-5.3 正在原创生成..." : "✨ GLM-5.3 原创多元回复"}
       </button>
 
       {/* Tabs */}
@@ -780,17 +1105,12 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* 🆕 阶段/消费力/难度 */}
+              {/* 阶段 / 难度 / 上下文 */}
               <div className="analysis-tags-row">
                 <div className={`tag-pill stage-${analysis.interactStage}`}>
                   <span className="tag-icon">🎯</span>
                   <span className="tag-name">互动阶段</span>
                   <span className="tag-value">{analysis.interactStage}</span>
-                </div>
-                <div className={`tag-pill power-${analysis.spendingPower === '超高' ? 'top' : analysis.spendingPower === '高' ? 'high' : analysis.spendingPower === '低' ? 'low' : 'mid'}`}>
-                  <span className="tag-icon">💎</span>
-                  <span className="tag-name">消费力</span>
-                  <span className="tag-value">{analysis.spendingPower}</span>
                 </div>
                 <div className={`tag-pill diff-${analysis.replyDifficulty === '高危' ? 'danger' : analysis.replyDifficulty === '困难' ? 'hard' : analysis.replyDifficulty === '简单' ? 'easy' : 'mid'}`}>
                   <span className="tag-icon">⚡</span>
@@ -805,11 +1125,32 @@ export default function Home() {
                     <span className="tag-value">{analysis._contextualTags.contextCount} 轮</span>
                   </div>
                 )}
+                {analysis._relationshipState?.primaryGoal && (
+                  <div className="tag-pill memory-tag">
+                    <span className="tag-icon">🧭</span>
+                    <span className="tag-name">本轮目标</span>
+                    <span className="tag-value">{analysis._relationshipState.primaryGoal}</span>
+                  </div>
+                )}
+                {analysis._relationshipState?.familiarity && (
+                  <div className="tag-pill memory-tag">
+                    <span className="tag-icon">🤝</span>
+                    <span className="tag-name">熟悉度</span>
+                    <span className="tag-value">{analysis._relationshipState.familiarity}</span>
+                  </div>
+                )}
+                {analysis._relationshipState?.algorithmCore?.name && (
+                  <div className="tag-pill memory-tag" title={analysis._relationshipState.algorithmCore.revision}>
+                    <span className="tag-icon">🧩</span>
+                    <span className="tag-name">核心算法</span>
+                    <span className="tag-value">goutoujunshi</span>
+                  </div>
+                )}
               </div>
 
               {analysis.crossLine && (
                 <div className="analysis-alert-box">
-                  🚨 建议优先使用 ✅ 标记的性格卡，慎用 ⚠️ 标记的
+                  🚨 当前消息存在边界风险，GLM-5.3 将优先生成清晰、克制的回复
                 </div>
               )}
               {analysis.replyHints && analysis.replyHints.length > 0 && (
@@ -821,6 +1162,29 @@ export default function Home() {
                 <button className="bulk-btn" onClick={handleSaveBrother} disabled={results.length === 0}>💾 存档案</button>
                 <button className="bulk-btn primary" onClick={handleExport} disabled={results.length === 0}>📤 复制全部</button>
               </div>
+            </div>
+          )}
+
+          {!isAiGenerating && aiProfile?.profile && (
+            <div className="ai-profile-card">
+              <div className="analysis-title"><span>🤖</span><span>AI 沟通画像</span><span className="confidence-badge">信心 {aiProfile.profile.confidence}%</span></div>
+              <p>{aiProfile.profile.summary}</p>
+              <div className="profile-chip-row">
+                {(aiProfile.profile.interests || []).map(item => <span key={item} className="memory-chip">#{item}</span>)}
+              </div>
+              <div className="profile-detail"><strong>沟通风格：</strong>{aiProfile.profile.communicationStyle}</div>
+              <div className="profile-detail"><strong>建议话题：</strong>{(aiProfile.profile.preferredTopics || []).join("、") || "—"}</div>
+              <div className="profile-detail"><strong>避免话题：</strong>{(aiProfile.profile.avoidTopics || []).join("、") || "—"}</div>
+              {aiProfile.algorithmCore?.name && (
+                <div className="profile-detail"><strong>核心算法：</strong>goutoujunshi · {String(aiProfile.algorithmCore.revision || "").slice(0, 7)}</div>
+              )}
+              {aiProfile.knowledgeTopics?.length > 0 && (
+                <div className="profile-detail"><strong>本轮边界：</strong>{aiProfile.knowledgeTopics.map(topic => ({ gift: "礼物与金钱", distress: "负面情绪", invitation: "邀约", conflict: "冲突", privacy: "隐私与越界" }[topic] || topic)).join("、")}</div>
+              )}
+              <div className="profile-strategy">
+                {(aiProfile.strategy?.approach || []).map((item, i) => <div key={i}>• {item}</div>)}
+              </div>
+              {aiProfile.riskNotice && <div className="privacy-note">{aiProfile.riskNotice}</div>}
             </div>
           )}
 
@@ -852,7 +1216,6 @@ export default function Home() {
                     <button className="fav-btn" onClick={() => toggleFav(r)} title="收藏">
                       {favContains(r) ? "⭐" : "☆"}
                     </button>
-                    <button className="regen-btn" onClick={() => handleRegenOne(r.personality)} title="换一条">🔄</button>
                     <button
                       className={`copy-btn ${copiedId === "r"+i ? "copied" : ""}`}
                       onClick={() => handleCopy(r.text, "r"+i)}
@@ -871,6 +1234,20 @@ export default function Home() {
                   )}
                 </div>
                 <div className="result-text" onPointerDown={() => handleUseTemplate(r.text)} title="点击将此模板填入输入框继续编辑">{r.text}</div>
+                {r.rationale && <div className="ai-rationale">生成依据：{r.rationale}</div>}
+                {(r.sendWhen || r.branches || r.stopCondition) && (
+                  <details className="reply-followup">
+                    <summary>后续怎么接</summary>
+                    <div className="reply-followup-body">
+                      {r.sendWhen && <div><strong>适合发送：</strong>{r.sendWhen}</div>}
+                      {r.branches?.positive && <div><strong>对方接住：</strong>{r.branches.positive}</div>}
+                      {r.branches?.ambiguous && <div><strong>对方含糊：</strong>{r.branches.ambiguous}</div>}
+                      {r.branches?.refusal && <div><strong>对方拒绝：</strong>{r.branches.refusal}</div>}
+                      {r.observationWindow && <div><strong>观察窗口：</strong>{r.observationWindow}</div>}
+                      {r.stopCondition && <div className="stop-condition"><strong>停止条件：</strong>{r.stopCondition}</div>}
+                    </div>
+                  </details>
+                )}
                 <div className="result-hint" onPointerDown={() => handleUseTemplate(r.text)}>👆 点击模板可填入输入框继续编辑</div>
               </div>
             ))}
@@ -892,6 +1269,7 @@ export default function Home() {
             <details key={h.id} className="hist-item" open={history.indexOf(h) === 0}>
               <summary>
                 <div className="hist-msg">{h.msg}</div>
+                <button className="link-btn danger hist-delete" onClick={(event) => { event.preventDefault(); removeHistory(h.id); }}>删除</button>
                 <div className="hist-meta">
                   {new Date(h.ts).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}
                   <span className="sep">·</span>{h.items.length} 条
@@ -918,13 +1296,7 @@ export default function Home() {
                     <div className="result-text">{it.text}</div>
                   </div>
                 ))}
-                <button className="regen-btn" onClick={() => {
-                  setMessage(h.msg);
-                  if (textareaRef.current) textareaRef.current.value = h.msg;
-                  setResults(h.items.map((it, i) => ({ ...it, personality: "hist_"+i })));
-                  setAnalysis(h.analysis || null);
-                  setActiveTab(TAB_RESULT);
-                }}>🔁 再生成</button>
+                <button className="regen-btn" onClick={() => handleHistoryRegenerate(h)}>🔁 AI 重新生成</button>
               </div>
             </details>
           ))}
@@ -991,11 +1363,11 @@ export default function Home() {
                     {/* 🧠 记忆统计 */}
                     {(b.interactionCount > 1 || b.scenarioStats) && (
                       <div className="bro-memory-section">
-                        <div className="bro-memory-title">🧠 AI 记忆画像</div>
+                        <div className="bro-memory-title">🧠 互动记忆</div>
                         <div className="bro-memory-row">
                           {b.interactionCount && <span className="memory-chip">累计 {b.interactionCount} 次互动</span>}
-                          {b.bestPersonalities && b.bestPersonalities.length > 0 && (
-                            <span className="memory-chip">🎯 常用: {b.bestPersonalities.map(p => personalities[p]?.label || p).join("·")}</span>
+                          {(b.bestStyles || b.bestPersonalities)?.length > 0 && (
+                            <span className="memory-chip">🎯 常用风格: {(b.bestStyles || b.bestPersonalities).join("·")}</span>
                           )}
                         </div>
                         {b.scenarioStats && Object.keys(b.scenarioStats).length > 0 && (
@@ -1014,6 +1386,12 @@ export default function Home() {
                             ))}
                           </div>
                         )}
+                      </div>
+                    )}
+                    {b.memoryMeta && (
+                      <div className="memory-source-note">
+                        <strong>记忆来源：</strong>{(b.memoryMeta.source || []).join("、") || "主播手动输入"}
+                        <span> · 信心 {b.memoryMeta.confidence ?? 0}%</span>
                       </div>
                     )}
                     <div className="bro-detail-actions">
@@ -1053,7 +1431,7 @@ export default function Home() {
       {docked && (
         <div className="docked-bar">
           <button className="generate-btn docked" onClick={() => handleGenerate()} disabled={isGenerating}>
-            {isGenerating ? "生成中..." : "✨ 生成回复"}
+            {isGenerating ? "AI 原创生成中..." : "✨ AI 原创多元回复"}
           </button>
         </div>
       )}
@@ -1061,7 +1439,7 @@ export default function Home() {
       <footer className="footer">
         <div className="footer-line">大哥维护神器 · NEURAL REPLY ENGINE v2.3 · 每个大哥独立聊天框 · AI 记忆隔离</div>
         <div className="footer-stats">
-          {stats.templates.toLocaleString()} 模板 · {stats.highQualityTemplates.toLocaleString()} 高质 · {stats.scenarios} 场景 · {stats.personalities} 性格 · {stats.combinationRules} 规则 · 8 方言
+          {stats.templates.toLocaleString()} 历史素材 · {stats.highQualityTemplates.toLocaleString()} 高质 · {stats.scenarios} 场景 · GLM-5.3 多元回复 · {stats.combinationRules} 规则 · 8 方言
         </div>
       </footer>
     </div>

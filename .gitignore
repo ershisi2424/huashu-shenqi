@@ -17,6 +17,13 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+.ai-reply-tool.pid
+.ai-reply-tool.log
+
+# 服务端本地账号数据库（不要提交账号、会话或审计数据）
+data/*.sqlite
+data/*.sqlite-shm
+data/*.sqlite-wal
 
 # Trae 临时
 .trae-html-share-packages/

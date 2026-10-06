@@ -19,6 +19,7 @@ const assert = require("node:assert/strict");
     speakerMapping: { brother: "brother", anchor: "anchor" },
   });
   assert.equal(input.actor.userId, "anchor-1");
+  assert.equal(input.actor.id, "anchor-1");
   assert.equal(input.subject.brotherId, "brother-1");
   assert.equal(input.history.length, 1);
   assert.ok(input.limits.currentMessage <= 800);
@@ -70,6 +71,13 @@ const assert = require("node:assert/strict");
   assert.equal(normalized.analysis.primaryGoal, "承接");
   assert.ok(buildPromptContext(normalized, routed.items).includes("primaryGoal"));
   assert.throws(() => validateGenerationAgainstRuntime(normalized, { replies: [{ text: "哥给我刷礼物，我才开心" }] }), (error) => error.code === "INVALID_AI_POLICY");
+  assert.throws(() => validateGenerationAgainstRuntime(normalized, { liveInvite: { text: "来直播给我刷个嘉年华", allowed: true } }), (error) => error.code === "INVALID_AI_POLICY");
+  assert.doesNotThrow(() => validateGenerationAgainstRuntime(normalized, {
+    replies: [{
+      text: "你先忙自己的，聊天就好，不用把礼物和关系绑在一起。",
+      rationale: "只做边界提醒：不诱导礼物、转账，也不根据健康状况给对方贴标签。",
+    }],
+  }), "安全说明里的边界关键词不应阻断可发送的正常回复");
   assert.throws(() => validateGenerationAgainstRuntime(normalized, { primaryGoal: "收线", replies: [] }), (error) => error.code === "INVALID_AI_POLICY");
 
   const runtimeResult = analyzeGoutoujunshiRuntime({

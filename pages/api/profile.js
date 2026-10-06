@@ -2,11 +2,16 @@ import { routeKnowledge } from "../../lib/knowledge-router";
 import { analyzeGoutoujunshi, GOUTOUJUNSHI_CORE } from "../../lib/goutoujunshi-core";
 import { analyzeGoutoujunshiRuntime } from "../../lib/goutoujunshi-runtime/index.js";
 import { validateGenerationAgainstRuntime } from "../../lib/goutoujunshi-runtime/contract.js";
-import { getCurrentUser, getAuthStore } from "../../lib/auth-session.cjs";
+import { authRequired, clearGuestSessionCookie, getCurrentGuest, getCurrentUser, getAuthStore, readGuestSessionToken, setGuestSessionCookie, setPrivateNoStore } from "../../lib/auth-session.cjs";
 import { callChatCompletion, ProviderRequestError } from "../../lib/ai-provider.cjs";
 import { normalizeReplyStyle, replyStyleInstruction } from "../../lib/reply-style.cjs";
 import fs from "node:fs";
 import path from "node:path";
+
+// 服务端 AI 链路说明：此路由是唯一的 GLM-5.3 生成入口。
+// 顺序必须保持为：认证/作用域校验 → 输入清洗 → goutoujunshi Runtime
+// → 服务端 promptContext → 智谱调用 → Runtime 契约校验 → 返回候选。
+// 浏览器不能提交历史记录来覆盖服务端已确认的消息，也不能绕过最终校验。
 
 const WINDOW_MS = Math.max(60_000, Number.parseInt(process.env.PROFILE_RATE_LIMIT_WINDOW_MS, 10) || 10 * 60 * 1000);
 const MAX_REQUESTS = Math.max(1, Number.parseInt(process.env.PROFILE_RATE_LIMIT_MAX, 10) || 60);
@@ -23,6 +28,16 @@ const GOUTOUJUNSHI_REFERENCE_ALLOWLIST = new Set([
   "references/practical/主动表达、第一次见面与自然接触.md",
   "references/practical/关系投入失衡：互惠判断、降级投入与退出决策.md",
 ]);
+
+function recordUsageSafely({ actor, brotherId, operation = "profile.generate", status = "success", errorCode = "", model = "", latencyMs = null } = {}) {
+  if (!actor || !["anchor", "operator", "super_admin"].includes(actor.role) || typeof getAuthStore !== "function") return;
+  try {
+    getAuthStore().recordAiUsage({ actor, brotherId, operation, provider: "zhipu", model, status, errorCode, latencyMs });
+  } catch (error) {
+    // Metrics must never make an otherwise valid AI response fail.
+    console.error("AI usage metric failed", error?.message || "Error");
+  }
+}
 
 function loadGoutoujunshiReferences(selectedReferences) {
   const references = Array.isArray(selectedReferences) ? selectedReferences.slice(0, 3) : [];
@@ -46,7 +61,7 @@ const MAINTENANCE_PRINCIPLES = `
 2. 具体关心：优先回应对方这句话里的具体事情和情绪，不泛泛输出鸡汤。能接住情绪就先接住，再根据语境自然追问一句，不急着教育、诊断或解决一切。
 3. 因人调整：只有素材有证据时才调整方式。偏事业和理性表达的人，使用平等、尊重、简洁的朋友式交流，可聊工作或兴趣但不盘问；偏情感表达的人，可以多倾听和回应感受，但不制造唯一感、秘密同盟或依赖。
 4. 因熟悉度调整：刚认识时礼貌轻松，问宽松的兴趣问题；逐渐熟悉后可引用真实聊过的小事，形成自然连续性；长期熟客重在记得细节、稳定回应和尊重边界，不执行固定天数的“升温计划”。
-5. 不使用操控技巧：不故意慢回以抬高身价，不假装忙碌，不欲擒故纵，不考验对方，不刺激征服欲，不制造嫉妒、稀缺、唯一性或情感依赖，不诱导礼物与消费。
+5. 不使用操控技巧：不故意慢回以抬高身价，不假装忙碌，不欲擒故纵，不考验对方，不刺激征服欲，不制造嫉妒、稀缺、唯一性或情感依赖，不利用压力或关系不对等推进结果。
 6. 最终效果：像一个有自己生活、会认真听人说话的真人。温暖但不黏，亲近但不越界，有个性但不伤人。回复里不得提及“维护、策略、类型、情绪价值、转化、付费”等幕后概念。
 `;
 
@@ -136,6 +151,14 @@ const PROFILE_SCHEMA = {
 
 function cleanText(value, maxLength) {
   return typeof value === "string" ? value.replace(/\u0000/g, "").trim().slice(0, maxLength) : "";
+}
+
+function firstRuntimeId(maxLength, ...values) {
+  for (const value of values) {
+    const normalized = cleanText(value, maxLength);
+    if (normalized) return normalized;
+  }
+  return "";
 }
 
 function getClientId(req) {
@@ -342,6 +365,7 @@ function normalizeAIResult(value, replyCount) {
 }
 
 export default async function handler(req, res) {
+  setPrivateNoStore(res);
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
     return res.status(405).json({ error: "仅支持 POST" });
@@ -350,12 +374,25 @@ export default async function handler(req, res) {
     res.setHeader("Retry-After", String(Math.ceil(WINDOW_MS / 1000)));
     return res.status(429).json({ error: `本地接口请求过于频繁：${Math.ceil(WINDOW_MS / 60_000)} 分钟最多 ${MAX_REQUESTS} 次，请稍后再试`, code: "LOCAL_RATE_LIMIT" });
   }
-  if (process.env.AUTH_REQUIRED === "true" && !getCurrentUser(req)) {
+  const activeUser = getCurrentUser(req);
+  const guestToken = readGuestSessionToken(req);
+  const guestStore = !activeUser && guestToken ? getAuthStore() : null;
+  if (guestStore) guestStore.cleanupGuestData();
+  const activeGuest = !activeUser && guestToken ? (getCurrentGuest(req) ? guestStore.touchGuestSession(guestToken) : null) : null;
+  if (!activeUser && guestToken && !activeGuest) {
+    clearGuestSessionCookie(res);
+    if (authRequired() || req.body?.brotherId) return res.status(401).json({ error: "游客会话已失效，请重新登录", code: "GUEST_AUTH_REQUIRED" });
+  }
+  if ((authRequired() || req.body?.brotherId) && !activeUser && !activeGuest) {
     return res.status(401).json({ error: "请先登录后使用 AI 分析", code: "AUTH_REQUIRED" });
   }
   if (!process.env.ZAI_API_KEY) return res.status(503).json({ error: "服务器未配置 ZAI_API_KEY" });
 
   const body = req.body && typeof req.body === "object" ? req.body : {};
+  if (activeGuest && (body.brotherId || body.sourceMessageId || body.maintenanceTask || body.maintenanceTaskMode === "use")) {
+    return res.status(403).json({ error: "游客只能使用自己的临时工作台，不能提交正式聊天对象或维护任务", code: "GUEST_SCOPE_FORBIDDEN" });
+  }
+  if (activeGuest) setGuestSessionCookie(res, guestToken, activeGuest.expiresAt);
   if (body.consent !== true) return res.status(400).json({ error: "请先确认你有权使用这些抖音素材" });
 
   const replyCount = Math.max(4, Math.min(8, Number.parseInt(body.replyCount, 10) || 8));
@@ -366,6 +403,7 @@ export default async function handler(req, res) {
   const material = {
     account: cleanText(body.account, 80),
     brotherId: cleanText(body.brotherId, 120),
+    sourceMessageId: cleanText(body.sourceMessageId, 120),
     currentMessage: cleanText(body.currentMessage, 800),
     works: cleanText(sourceInput.works, 6000),
     comments: cleanText(sourceInput.comments, 6000),
@@ -381,20 +419,60 @@ export default async function handler(req, res) {
     replyCount,
     replyPreferences: stringArray(body.replyPreferences, 8),
     replyStyle: normalizeReplyStyle(body.replyStyle),
+    maintenanceTaskMode: body.maintenanceTaskMode === "use" ? "use" : "ignore",
+    maintenanceTask: body.maintenanceTask && typeof body.maintenanceTask === "object"
+      ? {
+          id: cleanText(body.maintenanceTask.id, 120),
+          title: cleanText(body.maintenanceTask.title, 120),
+          status: cleanText(body.maintenanceTask.status, 40),
+          priority: cleanText(body.maintenanceTask.priority, 20),
+          reason: cleanText(body.maintenanceTask.reason, 600),
+          nextAction: cleanText(body.maintenanceTask.nextAction, 600),
+          dueAt: cleanText(body.maintenanceTask.dueAt, 80),
+          sourceMessageId: cleanText(body.maintenanceTask.sourceMessageId, 120),
+        }
+      : null,
     generationMode,
     openingMode,
     allowLiveInvite: liveInviteEligible,
     profile: body.profile && typeof body.profile === "object" ? body.profile : {},
   };
   material.allowLiveInvite = material.allowLiveInvite && hasLiveContentInterest(material);
+  if (material.maintenanceTaskMode !== "use" || !material.maintenanceTask?.id) material.maintenanceTask = null;
+  if (activeUser && material.brotherId) {
+    if (!material.sourceMessageId) return res.status(409).json({ error: "请先选择一条已确认的大哥消息", code: "CHAT_SOURCE_MESSAGE_REQUIRED" });
+    try {
+      const scopedContext = getAuthStore().getChatGenerationContext({ actor: activeUser, brotherId: material.brotherId, sourceMessageId: material.sourceMessageId });
+      // The server-owned message and history are authoritative. Never let a
+      // browser request analyze a stale or unrelated transcript.
+      material.currentMessage = scopedContext.currentMessage;
+      material.history = scopedContext.history;
+      material.sourceMessageId = scopedContext.sourceMessageId;
+    } catch (error) {
+      if (["CHAT_SOURCE_MESSAGE_REQUIRED", "CHAT_SOURCE_MESSAGE_NOT_FOUND"].includes(error?.message)) {
+        return res.status(409).json({ error: "所选大哥消息已不存在或不是已确认消息，请重新选择", code: "CHAT_SOURCE_MESSAGE_INVALID" });
+      }
+      if (["CHAT_BROTHER_NOT_FOUND", "CHAT_ACCESS_DENIED"].includes(error?.message)) {
+        return res.status(403).json({ error: "无权分析这段聊天记录", code: "CHAT_SCOPE_FORBIDDEN" });
+      }
+      console.error("Chat generation scope failed", error?.message || "Error");
+      return res.status(500).json({ error: "聊天分析范围校验失败，请稍后重试", code: "CHAT_SCOPE_FAILED" });
+    }
+  }
   if (!material.currentMessage) return res.status(400).json({ error: "请先输入对方当前发言" });
-  const activeUser = getCurrentUser(req);
-  const runtimeActor = activeUser
-    ? { userId: activeUser.id, role: activeUser.role }
-    : { userId: "anonymous", role: "anchor" };
-  const runtimeBrotherId = material.brotherId || material.account || "profile-session";
+  // Runtime 需要稳定的作用域标识。兼容旧会话对象（userId）和旧客户端仅提交 account 的请求，
+  // 避免因为单个标识字段缺失而把本轮 AI 请求误报为“输入不完整”。
+  const runtimeUserId = firstRuntimeId(120, activeUser?.id, activeUser?.userId, activeUser?.ownerUserId, activeGuest?.id, "anonymous");
+  // The Runtime input keeps the stable userId for namespace construction, while
+  // auth-store permission checks resolve actors by id. Carry both names so the
+  // same authenticated actor remains valid across both contracts.
+  const runtimeActor = { id: runtimeUserId, userId: runtimeUserId, role: cleanText(activeUser?.role, 40) || (activeGuest ? "guest" : "anchor") };
+  const runtimeBrotherId = firstRuntimeId(120, material.brotherId, material.account, "profile-session");
   let runtimeMemoryAdapter = null;
-  if (activeUser && material.brotherId && typeof getAuthStore === "function") {
+  // 长期记忆目前只属于主播自己的工作区。运营和最高管理的个人聊天
+  // 仍可正常走 Runtime，但不能把主播记忆适配器带进自己的会话，避免
+  // 角色边界错误或把别的主播的长期记忆混入本轮分析。
+  if (activeUser?.role === "anchor" && material.brotherId && typeof getAuthStore === "function") {
     const runtimeStore = getAuthStore();
     runtimeMemoryAdapter = {
       status: ({ actor, brotherId }) => runtimeStore.getRuntimeMemoryStatus({ actor, brotherId }),
@@ -414,11 +492,24 @@ export default async function handler(req, res) {
       memoryAdapter: runtimeMemoryAdapter,
     });
   } catch (error) {
-    console.error("Goutoujunshi runtime failed", error?.code || error?.name || "Error");
+    // Include Error.message in diagnostics; many domain errors intentionally use
+    // plain Error instances (for example CHAT_BROTHER_NOT_FOUND) without a code.
+    // Never expose this detail to the browser response.
+    console.error("Goutoujunshi runtime failed", error?.code || error?.message || error?.name || "Error");
     if (error?.code === "RUNTIME_REFERENCE_NOT_ALLOWED" || error?.code === "RUNTIME_REFERENCE_UNAVAILABLE") {
       return res.status(503).json({ error: "goutoujunshi 核心参考资料不可用，请检查部署文件", code: "GOUTOUJUNSHI_CORE_UNAVAILABLE" });
     }
-    return res.status(400).json({ error: "goutoujunshi Runtime 输入不完整", code: error?.code || "RUNTIME_INPUT_INVALID" });
+    const runtimeCode = error?.code || error?.message || "";
+    if (runtimeCode === "ACTIVE_USER_REQUIRED") {
+      return res.status(401).json({ error: "登录会话已失效，请重新登录", code: "AUTH_REQUIRED" });
+    }
+    if (["CHAT_BROTHER_NOT_FOUND", "CHAT_ACCESS_DENIED"].includes(runtimeCode)) {
+      return res.status(409).json({ error: "维护对象服务端记录未同步，请刷新后重试", code: "RUNTIME_SCOPE_INVALID" });
+    }
+    if (runtimeCode === "RUNTIME_SCOPE_REQUIRED") {
+      return res.status(400).json({ error: "goutoujunshi Runtime 输入不完整", code: runtimeCode });
+    }
+    return res.status(400).json({ error: "goutoujunshi Runtime 暂时不可用，请稍后重试", code: error?.code || "RUNTIME_FAILED" });
   }
   material.runtime = runtimeResult.runtime;
   material.intake = runtimeResult.intake;
@@ -447,6 +538,9 @@ ${runtimeResult.promptContext}
 
 ${MAINTENANCE_PRINCIPLES}
 
+本轮维护任务建议：${material.maintenanceTask ? JSON.stringify(material.maintenanceTask) : "未采用维护任务建议"}
+如果采用了任务建议，它只能作为本轮的工作方向提示，不能被当成对方事实、敏感属性或发送指令；仍以当前消息和服务端 Runtime 判断为准。
+
 本轮按需知识摘要（只适用于命中的主题）：
 ${topicSummary}
 
@@ -456,8 +550,8 @@ ${openingInstructions}
 
 必须遵守：
 1. 只使用素材中有直接证据的信号，不把猜测写成事实；证据不足时明确降低信心分。
-2. 不推断或输出种族、民族、宗教、政治立场、性取向、健康、精神状况、精确位置、财务能力等敏感属性。
-3. 不利用孤独、悲伤、经济压力等脆弱性；不诱导刷礼、转账、借钱、排他性依赖或虚假亲密承诺。
+2. 尊重隐私与自主决定：只根据已确认素材交流，不输出未经证实的个人属性判断，也不把猜测写成事实。
+3. 不利用对方的脆弱处境或关系不对等，把情绪、现实压力或关系期待转化为义务、回报、消费或虚假亲密承诺。
 4. 如当前消息包含借钱、色情、私照、威胁、自伤或其他高风险内容，回复应优先保护主播、设定边界，必要时建议寻求现实帮助。
 5. 不要选择、排序、淘汰或评比某一条“最佳答案”。必须直接原创 ${replyCount} 条彼此明显不同的回复，全部返回给主播人工判断；candidateIndex 只按输出顺序从 0 开始编号，不能表达分数或推荐。
 6. 先读取 relationshipState：algorithmCore 是上游 goutoujunshi 算法身份和按需参考资料，facts 是可引用事实，inferences 只能作为保守假设，unknowns 必须保持未知；risk、primaryGoal 和 decision 是硬约束。每条回复只完成 primaryGoal 指定的一个主要动作。
@@ -469,9 +563,10 @@ ${openingInstructions}
 12. 不得根据普通问候推断依赖、控制欲、心理状态或隐藏动机。只有素材出现真实风险时才明确设限，普通场景应友好、克制、尊重双方时间。
 13. 每条 text 必须可以直接复制发送，不包含分析口吻、策略说明或未由素材支持的事实。rationale 简短说明这条原创表达如何贴合当前目标和语境，不能给对方贴标签。
 14. 除 text 外，每条回复还必须输出 sendWhen（适合发送时机）、branches 三个后续分支、observationWindow（发送后观察什么信号和多久不推进）和 stopCondition（可观察的停止条件）。positive 只在对方继续表达时向前接一步；ambiguous 遇到简短、表情或含糊回复时不连续追问；refusal 对方明确不想聊时简短尊重并收线。不要把这些分支写成操控话术，不要自动发送。
-15. 如果返回 liveInvite，必须同时满足：对方素材明确谈到直播、相关内容或表现出想看你内容的兴趣；邀请是轻量、可拒绝、只描述直播内容，不提礼物、打赏、消费、支持主播或亏欠感；最近 24 小时已经邀请过或素材没有兴趣证据时，allowed 必须为 false 且 text 为空。liveInvite 只是一个可人工选择的候选，不是发送指令。
+15. 如果返回 liveInvite，必须同时满足：对方素材明确谈到直播、相关内容或表现出想看你内容的兴趣；邀请是轻量、可拒绝、只描述直播内容，不加入费用、支持义务、回报或亏欠感；最近 24 小时已经邀请过或素材没有兴趣证据时，allowed 必须为 false 且 text 为空。liveInvite 只是一个可人工选择的候选，不是发送指令。
 16. 仅输出一个 JSON 对象，不要输出 Markdown 代码块或其他说明。JSON 必须严格符合以下 Schema：${JSON.stringify(PROFILE_SCHEMA)}`;
 
+  const usageStartedAt = Date.now();
   try {
     const providerResult = await callChatCompletion({
       env: process.env,
@@ -491,7 +586,10 @@ ${openingInstructions}
     const payload = providerResult.payload;
     const model = providerResult.model;
     const text = outputText(payload);
-    if (!text) return res.status(502).json({ error: "AI 未返回可用结果" });
+    if (!text) {
+      recordUsageSafely({ actor: activeUser, brotherId: material.brotherId, status: "error", errorCode: "EMPTY_RESPONSE", model, latencyMs: Date.now() - usageStartedAt });
+      return res.status(502).json({ error: "AI 未返回可用结果" });
+    }
     const generated = JSON.parse(text);
     validateGenerationAgainstRuntime(runtimeResult, generated);
     const normalizedResult = normalizeAIResult(generated, material.replyCount);
@@ -501,6 +599,7 @@ ${openingInstructions}
     if (!material.allowLiveInvite || !invite?.allowed || !invite.text || unsafeInvite) {
       normalizedResult.liveInvite = null;
     }
+    recordUsageSafely({ actor: activeUser, brotherId: material.brotherId, status: "success", model, latencyMs: Date.now() - usageStartedAt });
     return res.status(200).json({
       ...normalizedResult,
       knowledgeTopics: material.knowledgeTopics,
@@ -515,6 +614,8 @@ ${openingInstructions}
       provider: "zhipu",
     });
   } catch (error) {
+    const usageStatus = error?.code === "AI_TIMEOUT" || error?.name === "TimeoutError" ? "timeout" : error?.code === "ZHIPU_RATE_LIMIT" ? "rate_limited" : "error";
+    recordUsageSafely({ actor: activeUser, brotherId: material.brotherId, status: usageStatus, errorCode: error?.code || error?.message || "AI_REQUEST_FAILED", model: error?.model || "", latencyMs: Date.now() - usageStartedAt });
     console.error("Profile generation failed", error?.name || "Error", error?.code || "");
     if (error?.code === "INVALID_AI_POLICY") return res.status(502).json({ error: "AI 回复越过 Runtime 安全边界，请重试", code: "INVALID_AI_POLICY" });
     if (error?.message === "INVALID_AI_SCHEMA") return res.status(502).json({ error: "AI 返回的多元回复格式不合格，请重试", code: "INVALID_AI_SCHEMA" });

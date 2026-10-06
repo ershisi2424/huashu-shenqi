@@ -1,26 +1,23 @@
 import { useEffect } from "react";
 import "../styles/globals.css";
+import ThemeToggle from "../components/theme/ThemeToggle";
+import { THEME_STORAGE_KEY, normalizeTheme, resolveTheme } from "../lib/theme.cjs";
 
 export default function App({ Component, pageProps }) {
   useEffect(() => {
-    // 主动注销旧版 Service Worker，防止缓存旧 JS 导致更新不生效
+    // 注册 PWA Service Worker。版本更新和旧缓存清理由 sw.js 自己管理。
     if (typeof window !== "undefined" && "serviceWorker" in navigator) {
-      navigator.serviceWorker
-        .getRegistrations()
-        .then((regs) => {
-          for (const reg of regs) {
-            reg.unregister();
-          }
-        })
-        .catch(() => {});
-      // 清空所有缓存
-      if ("caches" in window) {
-        caches.keys().then((keys) => {
-          for (const k of keys) caches.delete(k);
-        });
-      }
+      const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
+      navigator.serviceWorker.register(`${basePath}/sw.js`).catch(() => {});
     }
   }, []);
 
-  return <Component {...pageProps} />;
+  useEffect(() => {
+    const stored = normalizeTheme(window.localStorage.getItem(THEME_STORAGE_KEY));
+    const prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)").matches === true;
+    document.documentElement.dataset.theme = resolveTheme(stored, prefersDark);
+    document.documentElement.dataset.themePreference = stored;
+  }, []);
+
+  return <><Component {...pageProps} /><ThemeToggle /></>;
 }

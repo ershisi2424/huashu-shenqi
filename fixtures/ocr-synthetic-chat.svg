@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620">
+  <rect width="1200" height="620" fill="#f2f4f1"/>
+  <rect x="28" y="24" width="1144" height="572" rx="26" fill="#ffffff" stroke="#d6ddd8" stroke-width="3"/>
+  <text x="72" y="88" fill="#20333e" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="28" font-weight="700">合成聊天截图 · 仅用于本地 OCR 联调</text>
+  <text x="72" y="128" fill="#70807d" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="20">虚构内容，不代表真实用户或真实平台记录</text>
+  <rect x="72" y="178" width="700" height="118" rx="22" fill="#eef2f0"/>
+  <text x="104" y="224" fill="#263942" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="30">今天刚下班，有点累。</text>
+  <text x="104" y="266" fill="#6c7c7a" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="19">合成大哥 · 左侧消息</text>
+  <rect x="418" y="342" width="710" height="118" rx="22" fill="#dcefeb"/>
+  <text x="450" y="388" fill="#1b4f54" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="30">忙了一天，先歇口气。</text>
+  <text x="450" y="430" fill="#4e7774" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="19">合成主播 · 右侧消息</text>
+</svg>

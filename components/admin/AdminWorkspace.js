@@ -14,6 +14,7 @@ const AUDIT_ACTION_LABELS = {
   "auth.login": "登录",
   "chat.brother.create": "新增维护对象",
   "chat.message.append": "记录聊天消息",
+  "chat.message.edit": "修改聊天消息",
 };
 
 const AUDIT_ROLE_LABELS = { super_admin: "最高管理", operator: "运营", anchor: "主播" };
@@ -173,7 +174,21 @@ export default function AdminWorkspace() {
         {loading ? <div className={styles.empty}>读取中…</div> : <>
           {currentUser?.role === "super_admin" && <section><div className={styles.sectionTitle}><strong>待审批运营</strong><span>{items.length}</span></div>{items.length === 0 ? <div className={styles.empty}>暂无待审批运营</div> : <div className={styles.list}>{items.map((item) => <article className={styles.item} key={item.id}><div><strong>{item.name}</strong><small>{item.phone} · 注册于 {new Date(item.createdAt).toLocaleString("zh-CN")}</small></div><div className={styles.actions}><button onClick={() => decide(item.id, "approve")}>批准</button><button onClick={() => decide(item.id, "reject")}>拒绝</button></div></article>)}</div>}</section>}
           <section><div className={styles.sectionTitle}><strong>运营复盘</strong><span>只读</span></div><div className={styles.metrics}><div><b>{overview?.operators?.length || 0}</b><small>运营账号</small></div><div><b>{overview?.anchors?.length || 0}</b><small>主播账号</small></div><div><b>{overview?.recentMessages?.length || 0}</b><small>最近消息</small></div></div><div className={styles.subsectionTitle}>主播账号</div>{(overview?.anchors || anchorItems).length === 0 ? <div className={styles.empty}>还没有主播账号</div> : <div className={styles.list}>{(overview?.anchors || anchorItems).map((item) => <article className={styles.item} key={item.id}><div><strong>{item.name}</strong><small>{item.phone} · {item.status === "active" ? "可登录" : item.status}</small></div><div className={styles.itemStats}>{item.brotherCount || 0} 位维护对象 · {item.messageCount || 0} 条消息</div></article>)}</div>}</section>
-          {currentUser?.role === "operator" && <section className={styles.anchorCreate}><div className={styles.subsectionTitle}>新增主播账号</div><form onSubmit={createAnchor} className={styles.formGrid}><input aria-label="主播姓名" placeholder="主播姓名" value={anchorForm.name} onChange={(event) => setAnchorForm({ ...anchorForm, name: event.target.value })} /><input aria-label="主播手机号" placeholder="手机号" value={anchorForm.phone} onChange={(event) => setAnchorForm({ ...anchorForm, phone: event.target.value })} /><input aria-label="主播密码" type="password" placeholder="初始密码（至少 8 位）" value={anchorForm.password} onChange={(event) => setAnchorForm({ ...anchorForm, password: event.target.value })} /><button type="submit">创建主播登录</button></form></section>}
+          {currentUser?.role === "operator" && <section className={styles.anchorCreate}>
+            <div className={styles.subsectionTitle}>新增主播账号</div>
+            <form onSubmit={createAnchor} className={styles.formGrid}>
+              <input aria-label="主播姓名" placeholder="主播姓名" value={anchorForm.name} onChange={(event) => setAnchorForm({ ...anchorForm, name: event.target.value })} />
+              <input aria-label="主播手机号" placeholder="手机号" value={anchorForm.phone} onChange={(event) => setAnchorForm({ ...anchorForm, phone: event.target.value })} />
+              <input
+                aria-label="主播密码"
+                type="password"
+                placeholder="初始密码（至少 8 位）"
+                value={anchorForm.password}
+                onChange={(event) => setAnchorForm({ ...anchorForm, password: event.target.value })}
+              />
+              <button type="submit">创建主播登录</button>
+            </form>
+          </section>}
           {currentUser?.role === "operator" && <section><div className={styles.sectionTitle}><strong>待审批主播</strong><span>{pendingAnchors.length}</span></div>{pendingAnchors.length === 0 ? <div className={styles.empty}>暂无待审批主播</div> : <div className={styles.list}>{pendingAnchors.map((item) => <article className={styles.item} key={item.id}><div><strong>{item.name}</strong><small>{item.phone} · 申请于 {new Date(item.createdAt).toLocaleString("zh-CN")}</small></div><div className={styles.actions}><button disabled={anchorDecisionId === item.id} onClick={() => decideAnchor(item.id, "approve")}>{anchorDecisionId === item.id ? "处理中…" : "批准"}</button><button disabled={anchorDecisionId === item.id} onClick={() => decideAnchor(item.id, "reject")}>拒绝</button></div></article>)}</div>}</section>}
           <section><div className={styles.subsectionTitle}>最近消息记录</div>{!overview?.recentMessages?.length ? <div className={styles.empty}>还没有服务端聊天记录</div> : <div className={styles.messageList}>{overview.recentMessages.map((message) => <article key={message.id}><div><strong>{message.brotherNickname}</strong><small>{message.anchorName}{message.operatorName ? ` · ${message.operatorName}` : ""} · {new Date(message.createdAt).toLocaleString("zh-CN")}</small></div><p className={message.sender === "anchor" ? styles.anchorMessage : ""}>{message.text}</p></article>)}</div>}</section>
           <section className={styles.auditSection}>

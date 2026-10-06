@@ -12,14 +12,19 @@ function assert(value, message) {
   const coreSource = fs.readFileSync(__dirname + "/lib/goutoujunshi-core.js", "utf8")
     .replace(/^export const /gm, "const ")
     .replace(/^export function /gm, "function ");
+  const profileSource = fs.readFileSync(__dirname + "/pages/api/profile.js", "utf8");
+  assert(profileSource.includes("runtimeUserId"), "Runtime 必须从账号对象兼容提取稳定主播 ID");
+  assert(profileSource.includes("id: runtimeUserId"), "Runtime 传给权限存储层的主播身份必须包含 id 字段");
+  assert(profileSource.includes("runtimeBrotherId"), "Runtime 必须为维护对象提供稳定回退 ID");
+  assert(profileSource.includes("RUNTIME_SCOPE_INVALID"), "Runtime 对象作用域失败必须返回明确诊断码");
   const { analyzeGoutoujunshiRuntime } = await import("./lib/goutoujunshi-runtime/index.js");
   const { validateGenerationAgainstRuntime } = await import("./lib/goutoujunshi-runtime/contract.js");
-  let source = knowledgeSource + "\n" + coreSource + "\n" + fs.readFileSync(__dirname + "/pages/api/profile.js", "utf8")
+  let source = knowledgeSource + "\n" + coreSource + "\n" + profileSource
     .replace(/^import .*knowledge-router.*$/m, "")
     .replace(/^import .*goutoujunshi-core.*$/m, "")
     .replace(/^import .*goutoujunshi-runtime\/index\.js.*$/m, "")
     .replace(/^import .*goutoujunshi-runtime\/contract\.js.*$/m, "")
-    .replace(/^import .*auth-session\.cjs.*$/m, "const getCurrentUser = () => null; const getAuthStore = () => null;")
+    .replace(/^import .*auth-session\.cjs.*$/m, "const authRequired = () => process.env.AUTH_REQUIRED === 'true'; const getCurrentUser = () => null; const getCurrentGuest = () => null; const getAuthStore = () => null; const readGuestSessionToken = () => ''; const setGuestSessionCookie = () => {}; const clearGuestSessionCookie = () => {}; const setPrivateNoStore = () => {};")
     .replace(/^import .*ai-provider\.cjs.*$/m, "const { callChatCompletion, ProviderRequestError } = provider;")
     .replace(/^import .*reply-style\.cjs.*$/m, "const { normalizeReplyStyle, replyStyleInstruction } = replyStyle;")
     .replace(/^import fs from "node:fs";$/m, "")
@@ -77,7 +82,9 @@ function assert(value, message) {
     assert(request.thinking.type === "enabled", "GLM-5.3 应开启思考模式");
     assert(request.messages[0].content.includes("具体关心"), "AI 提示词应应用健康维护原则");
     assert(request.messages[0].content.includes("不故意慢回以抬高身价"), "AI 提示词应禁止操控性慢回策略");
-    assert(request.messages[0].content.includes("不诱导礼物与消费"), "AI 提示词应禁止消费诱导");
+    assert(request.messages[0].content.includes("尊重隐私与自主决定"), "AI 提示词应使用自然的边界表达");
+    assert(!request.messages[0].content.includes("不诱导礼物与消费"), "AI 提示词不应暴露具体礼物限制词");
+    assert(!request.messages[0].content.includes("不推断或输出种族、民族、宗教、政治立场、性取向、健康"), "AI 提示词不应暴露具体敏感属性清单");
     const requestMaterial = JSON.parse(request.messages[1].content);
     assert(requestMaterial.relationshipState, "智谱请求应包含结构化关系状态");
     try {
@@ -181,6 +188,7 @@ function assert(value, message) {
     },
     relationshipState: {
       facts: ["对方当前发言：在吗"],
+      algorithmCore: { name: "fake-client-core", revision: "client-forged" },
       inferences: [],
       unknowns: ["双方熟悉程度未知"],
       evidence: [],

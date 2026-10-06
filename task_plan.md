@@ -28,6 +28,7 @@
 | --- | --- | --- |
 | `npm run build` 在当前 worktree 的 `.next/trace` 报 EPERM | 已运行服务或受保护的旧 `.next` 文件阻止直接覆盖 | 在不接触真实数据库的临时构建目录完成生产构建并通过；真实回环服务使用同一临时构建验证 |
 | 规格自检命令的正则写法错误 | `???` 被 rg 当成重复量词 | 改用固定字符串扫描，未发现占位符；不影响代码或规格内容 |
+| 规格自检占位符扫描正则再次报错 | `???` 作为正则量词导致 `rg` 解析失败 | 规格文件内容已输出并使用固定字符串命令复核；不影响规格或代码 |
 
 ## 验证证据
 
@@ -186,4 +187,125 @@
 - [completed] Task 3：建档、五阶段决策引擎和行动契约
 - [completed] Task 4：服务端隔离长期记忆
 - [completed] Task 5：Runtime 编排器和记忆 API
-- [in_progress] Task 6：profile API 改为 Runtime 链路
+- [completed] Task 6：profile API 改为 Runtime 链路
+
+## 当前阶段：固定版聊天工作台排布（2026-10-03）
+
+- [completed] 用户确认固定版排布方案：顶部关系资料、中部聊天记录、底部主播回复与 AI 候选
+- [completed] 建立 `relationshipDock`、`relationshipHeader`、`replyWorkspace`、`aiCandidateShelf` UI 契约
+- [completed] 重排 `ChatWorkspace`，保留候选选择填入主播回复框的既有行为
+- [completed] 增加桌面、平板和手机端响应式排布，取消候选列表固定高度裁切
+- [completed] 完成定向测试、全量测试、隔离生产构建、差异检查和 3102 浏览器复核
+
+## 当前阶段：核心聊天链路稳定性与角色工作区（2026-10-05）
+
+目标：先修复 AI 候选错配/消失和历史串线，再实现超级管理员全量审批、运营复盘统计和运营/管理员独立聊天空间，最后补充维护任务参与生成。
+
+- [completed] 阶段 1：复现 AI 候选竞态、快照缺少目标消息绑定和账号作用域问题，先写失败测试
+- [completed] 阶段 2：修复候选请求取消/版本校验、快照目标绑定和历史恢复边界
+- [completed] 阶段 3：运营/最高管理独立个人聊天空间与按账号隔离
+- [completed] 阶段 4：超级管理员审批、全量操作查看、工具使用/API/运行状态管理
+- [completed] 阶段 5：运营主播复盘建议、主播审批与使用率/回复率统计
+- [completed] 阶段 6：聊天头像旁维护任务、采用/不采用任务建议并参与 AI 生成
+- [completed] 阶段 7：全量测试、生产构建和 3102 浏览器复审
+
+## 当前阶段：审批隔离、只读查看与临时游客工作台（2026-10-05）
+
+目标：先消除 Service Worker/API 缓存导致的账号串线和审批待办消失，再让运营与超级管理员安全查看所属主播工作台，补充维护任务录入和隔离的手机号游客临时工作台。
+
+- [completed] Task 1：API 私有响应与 Service Worker 缓存绕过
+- [completed] Task 2：审批中心队列独立加载、运营审批刷新和 base path 回归
+- [completed] Task 3：只读主播工作台认证与快照请求顺序修复
+- [completed] Task 4：维护任务手动创建与权限边界
+- [completed] Task 5：手机号游客会话、24 小时空闲清理与临时数据隔离
+- [completed] Task 6：游客登录入口、临时聊天工作台和完整 AI 候选链路
+- [completed] Task 7：全量回归、隔离生产构建和 3102 浏览器复审（浏览器交互仍建议由用户按清单复测）
+
+### Task 3-7 验证证据（2026-10-05）
+
+- [completed] Task 3：只读主播工作台先校验当前 `/api/auth/me/`，再请求快照；服务端保持运营范围和超级管理员全量权限，401/403 不改成匿名访问。
+- [completed] Task 4：维护任务支持主播、所属运营和超级管理员按范围手动创建；人工任务来源为空，支持 requestId 幂等与审计事务，聊天页可选择是否参与下一轮 AI。
+- [completed] Task 5：游客独立 `guest_accounts`/`guest_sessions`、手机号 HMAC、`hh_guest_session`、24 小时滑动过期与懒清理；正式 `/me`、快照和聊天 API 不接受游客会话。
+- [completed] Task 6：登录页增加手机号-only 游客入口；游客聊天使用 `guest:<id>` 本地命名空间，候选与回复历史仅本地保存；`/api/profile` 续期游客会话并拒绝正式对象、消息和维护任务 ID，仍通过 Runtime → GLM-5.3 生成候选。
+- [completed] Task 7：`npm test` 全量通过，游客/认证/聊天/API 定向测试通过，`git diff --check` 通过；隔离临时副本生产构建通过。未覆盖真实外部智谱调用、Windows 部署和真实浏览器 Service Worker 运行时。
+
+### Task 1-2 验证证据
+
+- `test-service-worker.cjs`、`test-approval-isolation.cjs`、`test-auth-api.cjs`、`test-admin-ui.cjs`、`test-super-admin-approval-api.cjs`、`test-super-admin-approval-ui.cjs` 均通过。
+- Service Worker 现在按注册 scope 计算 `/api` 前缀并绕过所有 API；认证与审批响应显式 `private, no-store`。
+- 超级管理员两条审批队列独立加载；运营分支使用主播审批队列，审批后可见列表立即刷新。
+- 规格审查和代码质量审查均通过；剩余限制是契约测试尚未替代真实浏览器/生产 Service Worker 运行时验证。
+
+## 本阶段约束
+
+- 不读取抖音后台，不新增自动发送；AI 仍只处理主播或有权账号主动输入的文本。
+- 主播、运营、最高管理的数据按 `owner_user_id` 和本机 `storageScope` 双重隔离；运营/最高管理不自动获得主播私人工作区写权限。
+- 不覆盖用户已有未提交改动；不直接操作正在运行服务使用的 `.next` 或真实数据库。
+
+## 当前阶段：Windows 10 局域网部署准备（2026-10-05）
+
+目标：把部署前配置校验、显式数据目录和可审计的启动/停止入口固化为跨平台可测试的源码契约，同时明确 Windows 实机、服务托管、防火墙和 HTTPS 仍需验收的边界。
+
+- [completed] 阶段 1：部署配置校验与失败分类
+- [completed] 阶段 2：Windows PowerShell/cmd 启停入口与安全参数传递
+- [completed] 阶段 3：部署文档、测试结果与生产构建回归（源码/隔离副本）
+
+本阶段不启动/重启当前 3102，不修改正式 `data/auth.sqlite`，不把 macOS 源码测试描述为 Windows 10 运行时验收。
+
+### 本阶段验证证据
+
+- `npm test`：94/94 通过。
+- `node test-windows-deploy-config.cjs`：通过；合成生产变量执行 `npm run windows:check`：通过且不输出密钥。
+- 独立临时副本 `npm run build`：通过；`git diff --check`：通过。
+- Windows 10 实机、服务托管、防火墙、HTTPS、真实局域网访问、断电恢复和升级回滚仍为 PENDING。
+
+## 当前阶段：Runtime 唯一入口（2026-10-05）
+
+目标：让旧首页和 `/chat` 共用服务端 `goutoujunshi Runtime → GLM-5.3` 正式分析结果，消除浏览器端第二套关系判断路径。
+
+- [completed] Task 1：新增旧入口唯一 Runtime 契约失败测试，确认旧路径当前会被捕获
+- [completed] Task 2：移除旧首页浏览器端正式分析和 `relationshipState` 请求字段
+- [completed] Task 3：服务端忽略遗留客户端关系状态并补充 API 契约
+- [completed] Task 4：全量测试、独立生产构建和文档回归
+
+### 本阶段验证证据（2026-10-05）
+
+- `npm test`：95/95 通过；包含旧入口唯一 Runtime、页面生成契约和服务端伪造关系状态回归。
+- `git diff --check`：通过。
+- 独立临时副本 `npm run build`：通过；副本只补入 `data/scripts.json`，未复制正式 SQLite 数据库，也未停止或重启 3102。
+- 当前结论仅覆盖源码、离线测试和独立构建；真实 GLM、浏览器交互和 Windows 10 局域网部署仍待验收。
+
+## 当前阶段：Runtime UI 投影（2026-10-05）
+
+目标：让旧首页只展示服务端 Runtime 结果，避免浏览器本地预判在生成前或失败后被误认为正式分析。
+
+- [completed] Task 1：新增 Runtime UI 投影纯函数与失败测试
+- [completed] Task 2：旧首页改为只写入服务端投影，生成前/失败时清除旧正式分析
+- [completed] Task 3：全量测试、独立生产构建和文档回归
+
+### 本阶段验证证据
+
+- `npm test`：97/97 通过，包含 `test-runtime-ui-projection.cjs` 与 `test-runtime-ui-projection-contract.cjs`。
+- `git diff --check`：通过。
+- 独立临时副本 `npm run build`：通过；未停止或重启 3102，也未复制正式 SQLite 数据库。
+- 真实智谱、浏览器端到端和 Windows 10 局域网实机仍待验收。
+
+## 当前阶段：回复历史 Runtime 上下文持久化（2026-10-05）
+
+- [completed] 写失败测试，固定 migration、API 往返和 UI 保存/恢复契约
+- [completed] `reply_history` 增加 Runtime 五组 JSON 字段并接入 0003 迁移
+- [completed] 登录/访客历史保存与恢复同时还原候选和 Runtime 上下文
+- [completed] 全量测试、隔离构建与最终证据归档
+
+## 当前阶段：Agent Browser 冒烟适配（2026-10-05）
+
+- [completed] 写失败测试，固定浏览器开关、preflight、凭据边界和 session 生命周期
+- [completed] 实现 `scripts/browser-regression/agent-browser-smoke.cjs` 与 `npm run browser:smoke`
+- [completed] 全量测试、隔离构建与最终证据归档
+
+## 当前阶段：浏览器回归安全前置（2026-10-05）
+
+- [completed] 写失败测试，覆盖环境、端口、数据库、provider key 和 Cookie 边界
+- [completed] 实现 `lib/browser-regression-preflight.cjs` 与 CLI
+- [completed] 更新 `docs/production/BROWSER-REGRESSION.md` 和生产证据
+- [completed] 全量测试、隔离构建与最终证据归档

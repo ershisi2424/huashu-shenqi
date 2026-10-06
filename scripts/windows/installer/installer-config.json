@@ -1,0 +1,8 @@
+{
+  "serviceName": "HuashuWorkbench",
+  "productName": "Huashu Workbench",
+  "defaultInstallDir": "$PROGRAMFILES64\\Huashu",
+  "defaultDataDir": "$COMMONAPPDATA\\Huashu",
+  "defaultPort": 3102,
+  "preserveDataOnUninstall": true
+}
