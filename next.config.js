@@ -1,14 +1,12 @@
 /** @type {import('next').NextConfig} */
-const isGhPages = process.env.GH_PAGES === "1";
-const BASE_PATH = isGhPages ? "/huashu-shenqi" : "";
+const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH || "";
 
 const nextConfig = {
+  output: "standalone",
   reactStrictMode: true,
-  // 支持 next export 导出纯静态文件（便于 GitHub Pages 等托管）
-  output: "export",
   images: { unoptimized: true },
-  // GitHub Pages 部署在子路径时，自动加 basePath 和 assetPrefix
-  ...(isGhPages
+  // AI API 需要 Node.js / Serverless 运行时，不再使用纯静态导出。
+  ...(BASE_PATH
     ? {
         basePath: BASE_PATH,
         assetPrefix: `${BASE_PATH}/`,
@@ -18,8 +16,12 @@ const nextConfig = {
     // 传给 pages/_app.js 的 SW 注册与 manifest 引用
     NEXT_PUBLIC_BASE_PATH: BASE_PATH,
   },
-  // public 下静态文件导出时不会被 basePath 吞掉；trailingSlash 保证 PWA start_url "./" 解析稳定
   trailingSlash: true,
+  // The server-side goutoujunshi adapter reads a small allowlisted set of
+  // upstream Markdown references at request time; keep them in deployments.
+  outputFileTracingIncludes: {
+    "/api/profile": ["./vendor/goutoujunshi/**/*"],
+  },
 };
 
 module.exports = nextConfig;

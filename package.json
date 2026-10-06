@@ -2,16 +2,32 @@
   "name": "ai-reply-tool",
   "version": "1.0.0",
   "private": true,
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build",
-    "build:gh": "GH_PAGES=1 next build && touch out/.nojekyll",
     "start": "next start -p 3000",
-    "lint": "next lint"
+    "bootstrap-admin": "node scripts/bootstrap-admin.cjs",
+    "db:backup": "node scripts/db-backup.cjs",
+    "db:restore:verify": "node scripts/db-restore-verify.cjs",
+    "windows:check": "node scripts/windows-deploy-check.cjs",
+    "windows:release": "node scripts/windows/build-release.cjs --output .artifacts/windows-release",
+    "windows:installer:check": "node test-windows-installer-script.cjs",
+    "windows:installer:compile": "node scripts/windows/installer/compile-installer.cjs",
+    "browser:preflight": "node scripts/browser-regression-preflight.cjs",
+    "browser:smoke": "node scripts/browser-regression/agent-browser-smoke.cjs",
+    "smoke:ai-ocr": "node scripts/ai-ocr-smoke.cjs",
+    "pretest": "node test-service-worker.cjs && node test-approval-isolation.cjs",
+    "test": "node scripts/verify.cjs",
+    "test:runtime": "node test-goutoujunshi-runtime.cjs && node test-goutoujunshi-runtime-memory.cjs && node test-runtime-memory-api.cjs && node test-api.cjs"
   },
   "dependencies": {
-    "next": "14.2.5",
-    "react": "18.3.1",
-    "react-dom": "18.3.1"
+    "better-sqlite3": "^13.0.3",
+    "next": "16.3.3",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "tesseract.js": "^6.0.1"
   }
 }

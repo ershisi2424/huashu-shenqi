@@ -1,0 +1,133 @@
+name: Windows installer smoke
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-x64:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: node test-windows-ci-contract.cjs
+      - shell: pwsh
+        run: .\scripts\windows\ci-install-smoke.ps1 -SourceRoot $PWD
+
+  package-internal:
+    # 只有手动触发或主分支推送才允许创建 Release；PR 只执行上面的只读 smoke job。
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+    needs: windows-x64
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install dependencies and build release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          npm ci
+          npm test
+          npm run build
+          node scripts/windows/build-release.cjs --source $PWD --output (Join-Path $env:RUNNER_TEMP "huashu-release")
+      - name: Prepare NSIS inputs and fixed WinSW dependency
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = Join-Path $env:RUNNER_TEMP "huashu-installer-stage"
+          New-Item -ItemType Directory -Force -Path (Join-Path $stage "runtime"), (Join-Path $stage "scripts\windows\installer"), (Join-Path $stage "scripts\windows") | Out-Null
+          Copy-Item (Get-Command node).Source (Join-Path $stage "runtime\node.exe")
+          Copy-Item "scripts\windows\service\HuashuWorkbench.xml" (Join-Path $stage "HuashuWorkbench.xml")
+          Copy-Item "scripts\windows\huashu-launcher.cjs" (Join-Path $stage "scripts\windows\huashu-launcher.cjs")
+          Copy-Item "scripts\windows\acl.ps1" (Join-Path $stage "scripts\windows\acl.ps1")
+          Copy-Item "scripts\windows\installer\download-components.ps1", "scripts\windows\installer\verify-component.ps1", "scripts\windows\installer\stage-release.ps1", "scripts\windows\installer\issue-setup-code.cjs", "scripts\windows\installer\uninstall-preserve-data.ps1" (Join-Path $stage "scripts\windows\installer")
+          $winSwUrl = "https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe"
+          $winSwSha256 = "05b82d46ad331cc16bdc00de5c6332c1ef818df8ceefcd49c726553209b3a0da"
+          $winSwPath = Join-Path $stage "WinSW-x64.exe"
+          Invoke-WebRequest -Uri $winSwUrl -OutFile $winSwPath -UseBasicParsing
+          if ((Get-FileHash $winSwPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $winSwSha256) { throw "WINSW_SHA256_MISMATCH" }
+          "stage=$stage" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Create release manifest and archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = "1.0.0-ci.${{ github.run_number }}"
+          $tag = "windows-$version"
+          $baseUrl = "https://github.com/${{ github.repository }}/releases/download/$tag"
+          $release = Join-Path $env:RUNNER_TEMP "huashu-release"
+          $zip = Join-Path $env:RUNNER_TEMP "huashu-release-$version.zip"
+          Compress-Archive -Path (Join-Path $release "*") -DestinationPath $zip -CompressionLevel Optimal -Force
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $size = (Get-Item $zip).Length
+          $manifest = [ordered]@{
+            platform = "win32"
+            arch = "x64"
+            architecture = "x64"
+            version = $version
+            components = @([ordered]@{
+              id = "huashu-release"
+              url = "$baseUrl/huashu-release-$version.zip"
+              size = $size
+              sha256 = $hash
+              relativePath = "release.zip"
+              archive = $true
+            })
+          }
+          $manifestPath = Join-Path $env:RUNNER_TEMP "release-manifest.json"
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath -Encoding utf8
+          "version=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "release_tag=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "artifact_base_url=$baseUrl" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "zip_path=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "manifest_path=$manifestPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Compile unsigned internal installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = $env:stage
+          Copy-Item "scripts\windows\installer\Huashu-Setup.nsi" (Join-Path $stage "Huashu-Setup.nsi")
+          $makensis = Get-Command makensis.exe -ErrorAction SilentlyContinue
+          if (-not $makensis) { choco install nsis -y --no-progress; $makensis = Get-Command makensis.exe -ErrorAction Stop }
+          Push-Location $stage
+          try {
+            & $makensis.Source "/DHUASHU_ARTIFACT_BASE_URL=$env:artifact_base_url" "/DHUASHU_RELEASE_MANIFEST=$env:artifact_base_url/release-manifest.json" .\Huashu-Setup.nsi
+            if ($LASTEXITCODE -ne 0) { throw "NSIS_COMPILE_FAILED" }
+          } finally { Pop-Location }
+          New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP "windows-package") | Out-Null
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\windows\package-release.ps1 `
+            -ReleaseDir (Join-Path $env:RUNNER_TEMP "huashu-release") `
+            -ExePath (Join-Path $stage "Huashu-Setup-x64.exe") `
+            -OutputDir (Join-Path $env:RUNNER_TEMP "windows-package") `
+            -ArtifactBaseUrl $env:artifact_base_url `
+            -ManifestPath $env:manifest_path
+          if ($LASTEXITCODE -ne 0) { throw "PACKAGE_VERIFY_FAILED" }
+          "INTERNAL_UNVERIFIED" | Out-File -FilePath (Join-Path $env:RUNNER_TEMP "windows-package\SIGNING_STATUS.txt") -Encoding utf8
+      - name: Publish internal GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          gh release create $env:release_tag `
+            (Join-Path $env:RUNNER_TEMP "windows-package\Huashu-Setup-x64.exe") `
+            (Join-Path $env:RUNNER_TEMP "windows-package\package-manifest.json") `
+            (Join-Path $env:RUNNER_TEMP "windows-package\release-manifest.json") `
+            $env:zip_path `
+            --repo $env:GITHUB_REPOSITORY `
+            --title "Huashu $env:version Windows internal build" `
+            --notes "内部未签名构建（INTERNAL_UNVERIFIED）。安装前请核对 package-manifest.json 的 SHA-256；未完成 Authenticode 和 Windows 生产验收前不得用于商用部署。" `
+            --prerelease
