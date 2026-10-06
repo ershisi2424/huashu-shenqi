@@ -29,7 +29,9 @@ if (-not (Test-Path -LiteralPath $ReleaseDir -PathType Container)) {
 }
 
 $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
-if ([string]$manifest.architecture -ne "x64" -or [string]$manifest.platform -notin @("win32", "windows")) {
+$manifestArchitecture = [string]$manifest.architecture
+$manifestPlatform = [string]$manifest.platform
+if ($manifestArchitecture -ne "x64" -or ($manifestPlatform -ne "win32" -and $manifestPlatform -ne "windows")) {
   Stop-WithCode "RELEASE_ARCHITECTURE_INVALID" "发布清单必须声明 win32/x64"
 }
 $expected = ([string]$ExpectedSha256).Trim().ToLowerInvariant()
@@ -58,7 +60,10 @@ if ($violations) {
 
 $signature = Get-AuthenticodeSignature -FilePath $ExePath
 $signatureStatus = [string]$signature.Status
-$signatureSubject = if ($signature.SignerCertificate) { [string]$signature.SignerCertificate.Subject } else { "" }
+$signatureSubject = ""
+if ($signature.SignerCertificate) {
+  $signatureSubject = [string]$signature.SignerCertificate.Subject
+}
 if ($RequireSignature -and $signatureStatus -ne "Valid") {
   Stop-WithCode "SIGNATURE_REQUIRED" "生产发布必须通过 Authenticode 签名验证"
 }
@@ -73,7 +78,10 @@ if ($dumpbin) {
   $architectureStatus = "WINDOWS_X64_VERIFIED"
 }
 
-$status = if ($signatureStatus -eq "Valid") { "VERIFIED" } else { "INTERNAL_UNVERIFIED" }
+$status = "INTERNAL_UNVERIFIED"
+if ($signatureStatus -eq "Valid") {
+  $status = "VERIFIED"
+}
 [ordered]@{
   status = $status
   architecture = $architectureStatus
