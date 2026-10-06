@@ -29,15 +29,12 @@ if (-not (Test-Path -LiteralPath $ReleaseDir -PathType Container)) {
   Stop-WithCode "PACKAGE_INPUT_MISSING" "发布目录不存在"
 }
 
-# GitHub Actions invokes this script from the repository root. Keep the
-# verifier path literal so Windows PowerShell 5.1 and pwsh handle it identically
-# without relying on automatic script-path or local variable initialization.
-if (-not (Test-Path -LiteralPath "scripts\windows\verify-package.ps1" -PathType Leaf)) {
+if (-not (Test-Path -LiteralPath "scripts\windows\verify-package-runtime.ps1" -PathType Leaf)) {
   Stop-WithCode "PACKAGE_VERIFIER_MISSING" "缺少交付包校验脚本"
 }
 $expected = (Get-FileHash -LiteralPath $ExePath -Algorithm SHA256).Hash
 $verificationArgs = @(
-  "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts\windows\verify-package.ps1",
+  "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts\windows\verify-package-runtime.ps1",
   "-ExePath", $ExePath, "-ReleaseDir", $ReleaseDir, "-ExpectedSha256", $expected,
   "-ArtifactBaseUrl", $ArtifactBaseUrl, "-ManifestPath", $ManifestPath
 )
