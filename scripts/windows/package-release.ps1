@@ -29,13 +29,13 @@ if (-not (Test-Path -LiteralPath $ReleaseDir -PathType Container)) {
   Stop-WithCode "PACKAGE_INPUT_MISSING" "发布目录不存在"
 }
 
-$verificationScript = Join-Path $PSScriptRoot "verify-package.ps1"
-if (-not (Test-Path -LiteralPath $verificationScript -PathType Leaf)) {
+$verifierPath = Join-Path -Path (Split-Path -Parent $PSCommandPath) -ChildPath "verify-package.ps1"
+if (-not (Test-Path -LiteralPath $verifierPath -PathType Leaf)) {
   Stop-WithCode "PACKAGE_VERIFIER_MISSING" "缺少交付包校验脚本"
 }
 $expected = (Get-FileHash -LiteralPath $ExePath -Algorithm SHA256).Hash
 $verificationArgs = @(
-  "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $verificationScript,
+  "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $verifierPath,
   "-ExePath", $ExePath, "-ReleaseDir", $ReleaseDir, "-ExpectedSha256", $expected,
   "-ArtifactBaseUrl", $ArtifactBaseUrl, "-ManifestPath", $ManifestPath
 )

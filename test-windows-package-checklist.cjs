@@ -16,6 +16,8 @@ for (const text of [packageScript, verifyScript, checklist]) {
   assert.match(text, /保留|retain|preserve/i);
 }
 assert.match(packageScript, /INTERNAL_UNVERIFIED/);
+assert.match(packageScript, /\$verifierPath\s*=\s*Join-Path/);
+assert.doesNotMatch(packageScript, /\$verificationScript/);
 assert.match(verifyScript, /Get-AuthenticodeSignature/);
 assert.match(checklist, /setup|初始化/i);
 assert.match(checklist, /API|Provider/i);

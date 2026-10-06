@@ -26,14 +26,15 @@ ShowUninstDetails show
 
 Var DataDir
 Var SetupCode
-; $COMMONAPPDATA maps to ProgramData for the per-machine business data boundary.
+; ProgramData is the per-machine business data boundary. NSIS does not expose
+; a portable $COMMONAPPDATA constant, so resolve it from the Windows directory.
 
 Function .onInit
   ${IfNot} ${RunningX64}
     MessageBox MB_ICONSTOP "此安装包只支持 Windows x64。"
     Abort
   ${EndIf}
-  StrCpy $DataDir "$COMMONAPPDATA\Huashu"
+  StrCpy $DataDir "$WINDIR\..\ProgramData\Huashu"
 FunctionEnd
 
 Section "Huashu Workbench" SEC_MAIN
